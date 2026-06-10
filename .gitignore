@@ -22,3 +22,10 @@ thirdparty/hangover/build*/
 # OS
 .DS_Store
 Thumbs.db
+
+# Reference projects (not tracked)
+.temp/
+
+# Build output
+thirdparty/wine/build-native/
+thirdparty/wine/build-ohos/
