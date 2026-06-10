@@ -13,7 +13,7 @@
 set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WINE_SRC="$ROOT/.temp/wine"
+WINE_SRC="$ROOT/thirdparty/wine"
 OHOS_SDK="${OHOS_SDK:-/apps/harmony/sdk/default/openharmony}"
 OHOS_ARCH="${OHOS_ARCH:-x86_64}"
 
