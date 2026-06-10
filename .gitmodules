@@ -1,0 +1,3 @@
+[submodule "thirdparty/wine"]
+	path = thirdparty/wine
+	url = https://github.com/wine-mirror/wine.git
