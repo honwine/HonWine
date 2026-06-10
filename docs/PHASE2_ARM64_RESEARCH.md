@@ -7,19 +7,49 @@
 
 ## 1. 核心概念
 
-Phase 2 需要**双重翻译**：
+**场景**: HarmonyOS ARM64 设备上运行 Windows x86_64 程序。
 
-| 层次 | 翻译 | 工具 |
-|------|------|------|
-| CPU 指令 | x86_64 → ARM64 | FEX-Emu (ARM64EC) |
-| CPU 指令 | x86_32 → ARM64 | Box64 (wowbox64.dll) |
-| OS API | Windows → POSIX | Wine (原生 ARM64) |
+需要**两层翻译**：
 
-**架构图**:
+| 层次 | 翻译方向 | 工具 |
+|------|---------|------|
+| CPU 指令 | x86_64 → ARM64 | FEX-Emu (ARM64EC ABI) |
+| CPU 指令 | x86_32 → ARM64 | Box64 (WoW64 ABI) |
+| OS API | Windows → POSIX | Wine (ARM64 原生, 不模拟) |
+
+**关键**: Wine 本身以 ARM64 原生代码运行，只有 Windows 程序的 x86 指令在模拟器中执行。Windows API 调用时"跳出"模拟器，回到原生 ARM64 Wine。
+
+**完整数据流**:
 ```
-Windows x86_64 .exe  ──→  FEX ARM64EC  ──→  Wine ARM64 (原生)  ──→  OHOS Kernel
-Windows x86 .exe      ──→  Box64 wow64   ──→  Wine ARM64 (原生)  ──→  OHOS Kernel
+┌────────────────────────────────────────────────────┐
+│          HarmonyOS ARM64 设备                       │
+│                                                    │
+│  Windows x86_64 .exe                               │
+│      │                                             │
+│      ▼                                             │
+│  ┌──────────────┐   ARM64EC ABI    ┌────────────┐  │
+│  │ FEX-Emu      │ ←───────────→   │ Wine ARM64 │  │
+│  │ (x86_64→ARM) │   syscall 边界   │ (原生)      │  │
+│  └──────────────┘                  └─────┬──────┘  │
+│                                         │         │
+│  ┌──────────────┐   WoW64 ABI          │         │
+│  │ Box64        │ ←───────────→        │         │
+│  │ (x86→ARM64)  │   syscall 边界       │         │
+│  └──────────────┘                      │         │
+│                                         ▼         │
+│                              OHOS Kernel (Linux)   │
+└────────────────────────────────────────────────────┘
 ```
+
+**为什么用两个模拟器？**
+- **FEX** 实现了 ARM64EC ABI（Microsoft 标准），支持 x86_64 代码与 ARM64 原生代码在同一进程内混合执行——这是 Hangover 性能优势的核心
+- **Box64** 处理 32 位 x86 程序（很多老旧 Windows 软件和安装程序是 32 位）
+- 两者都编译为 Wine PE DLL (`libarm64ecfex.dll` / `wowbox64.dll`)，在 Wine 进程内运行
+
+**备选方案**: 是否可只用 Box64 同时处理 x86_64 和 x86？
+- Box64 本身支持 x86_64 → ARM64 翻译（就是干这个的），但它未实现 ARM64EC ABI
+- 如果放弃 ARM64EC（纯模拟 mode），性能会显著下降
+- 但作为**第一阶段验证**，单用 Box64 更简单（Box64 OHOS 移植 已有 OHOS port）
 
 ---
 
@@ -88,30 +118,29 @@ CFLAGS="--target=$TARGET --sysroot=$SYSROOT
 
 ## 5. 技术路线建议
 
+### 路线 A: 简化版 (Box64 only for x86_64)
+
 ```
-Phase 2a: 完整 Wine ARM64 编译
-├── 获取 llvm-mingw aarch64
-├── configure --host=aarch64-linux-ohos --enable-archs=arm64ec,aarch64,i386
-├── 编译 ARM64 PE DLLs + Unix .so
-└── 验证: wineserver --version on ARM64 device
+Phase 2a-1: 完整 Wine ARM64 编译
+├── 获取 llvm-mingw aarch64 (或跳过 PE, 复用 Box64 OHOS 移植 的套路)
+├── configure --host=aarch64-linux-ohos
+├── 编译 ARM64 Unix .so (已完成验证)
+└── 目标: wineserver + ntdll.so 在真机上运行
 
-Phase 2b: Box64 集成 (32-bit x86)
-├── 已有 Box64 OHOS 移植
-├── 编译 wowbox64.dll (Box64 as Wine PE DLL)
-├── 验证: 运行 x86 Windows console app
-└── 集成: HODLL=wowbox64.dll wine app.exe
+Phase 2a-2: Box64 standalone 集成
+├── Box64 OHOS 移植 已可用
+├── 用 Box64 直接运行 x86_64 Wine (整套 Wine 编译为 x86_64)
+│   即: Box64 模拟整个 x86_64 Wine 进程
+├── 优点: 无需 ARM64EC, 无需 FEX port, 立即可用
+└── 缺点: 性能较低 (整个 Wine 都在模拟器中)
 
-Phase 2c: FEX 集成 (64-bit x86_64)
-├── Port FEX to musl/OHOS
-├── 编译 libarm64ecfex.dll
-├── 验证: 运行 x86_64 Windows console app
-└── 集成: HODLL64=libarm64ecfex.dll wine app.exe
-
-Phase 2d: 图形栈
-├── Mesa zink on OHOS
-├── Wine Wayland driver (或 OHOS native)
-└── 验证: 运行 Windows GUI 程序
+Phase 2a-3: Box64 as Wine PE DLL
+├── 编译 wowbox64.dll (Box64 编译为 Wine 内嵌 DLL)
+├── Wine ARM64 原生 + Box64 只模拟 app 代码
+└── 性能优于全 Wine 模拟
 ```
+
+### 路线 B: 完整版 (FEX + ARM64EC)
 
 ---
 
