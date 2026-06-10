@@ -27,5 +27,6 @@ Thumbs.db
 .temp/
 
 # Build output
+out/
 thirdparty/wine/build-native/
 thirdparty/wine/build-ohos/
