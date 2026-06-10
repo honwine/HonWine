@@ -42,9 +42,11 @@ Phase 1: x86_64 (musl 适配)          Phase 2: ARM64 (交叉架构)
 | 任务 | 状态 | 预计工作量 |
 |------|------|-----------|
 | ntdll.so OHOS 编译 | ✅ | 已完成 |
-| 其他 Unix .so 编译 | ✅ | 22/22 编译通过 (win32u, ws2_32, mountmgr, 等) |
-| PE DLLs 整合 (从 native build) | ⬜ | 1 天 |
-| clang WARN_FLAGS 清理 | 🟡 | 1 天 |
+| 其他 Unix .so 编译 | ✅ | 22/22 编译通过 |
+| PE DLLs 整合 (从 native build) | ✅ | 615 DLL + 109 EXE |
+| clang WARN_FLAGS 清理 | ✅ | 3 gcc flags 已移除 |
+| HNP 打包 | ⬜ | 1-2 天 |
+| 真机运行验证 | ⬜ | 需要 OHOS x86_64 环境 |
 
 ### 第三阶段: 运行验证
 
