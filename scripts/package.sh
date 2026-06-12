@@ -39,6 +39,7 @@ deploy() {
 
     log "=== 部署到 $device ==="
     hdc tconn "$device"
+    hdc shell bm uninstall -n app.hackeris.honwine 2>/dev/null || true
     hdc file send "$hap" /data/local/tmp/
     hdc shell bm install -p /data/local/tmp/entry-default-signed.hap -r
 

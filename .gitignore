@@ -31,3 +31,4 @@ HonWine/
 thirdparty/wine/build-*/
 thirdparty/wine/*.bak
 thirdparty/box64/build*/
+thirdparty/freetype-VER-2-13-3/

@@ -57,8 +57,21 @@ for exe in "$WINE_SRC/build-native/programs/"*/x86_64-windows/*.exe; do
 done
 log "  *.exe stubs: $(ls "$BIN"/*.exe 2>/dev/null | wc -l) files"
 
-# ---- libc + NLS + wine.inf ----
+# ---- libc + libz + FreeType + NLS + wine.inf + fonts ----
 cp "$SYSROOT/usr/lib/x86_64-linux-ohos/libc.so" "$HNP_LAYOUT/lib/x86_64/"
+# FreeType + libz 放到 x86_64-unix/，和 win32u.so (dlopen 调用者) 同级
+cp "$SYSROOT/usr/lib/x86_64-linux-ohos/libz.so" "$HNP_LAYOUT/bin/x86_64-unix/"
+if [ -f "$BUILD_DIR/freetype_build/install/lib/libfreetype.so.6.20.2" ]; then
+    cp "$BUILD_DIR/freetype_build/install/lib/libfreetype.so.6.20.2" "$HNP_LAYOUT/bin/x86_64-unix/libfreetype.so"
+    cp "$BUILD_DIR/freetype_build/install/lib/libfreetype.so.6.20.2" "$HNP_LAYOUT/bin/x86_64-unix/libfreetype.so.6"
+    log "  FreeType + libz → bin/x86_64-unix/"
+else
+    warn "FreeType .so 未找到，字体渲染将不可用"
+fi
+# Wine 内置字体 (TrueType)
+mkdir -p "$HNP_LAYOUT/share/wine/fonts"
+cp "$WINE_SRC/fonts/"*.ttf "$HNP_LAYOUT/share/wine/fonts/"
+log "  fonts: $(ls "$HNP_LAYOUT/share/wine/fonts" | wc -l) .ttf files"
 cp "$WINE_SRC/build-native/nls/"*.nls "$HNP_LAYOUT/share/wine/nls/"
 cp "$WINE_SRC/build-native/loader/wine.inf" "$HNP_LAYOUT/share/wine/"
 
