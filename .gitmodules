@@ -4,3 +4,18 @@
 [submodule "thirdparty/box64"]
 	path = thirdparty/box64
 	url = https://github.com/ptitSeb/box64.git
+[submodule "thirdparty/wayland"]
+	path = thirdparty/wayland
+	url = https://gitlab.freedesktop.org/wayland/wayland.git
+[submodule "thirdparty/libffi"]
+	path = thirdparty/libffi
+	url = https://github.com/libffi/libffi.git
+[submodule "thirdparty/wayland-protocols"]
+	path = thirdparty/wayland-protocols
+	url = https://gitlab.freedesktop.org/wayland/wayland-protocols.git
+[submodule "thirdparty/libxkbcommon"]
+	path = thirdparty/libxkbcommon
+	url = https://github.com/xkbcommon/libxkbcommon.git
+[submodule "thirdparty/libxml2"]
+	path = thirdparty/libxml2
+	url = https://gitlab.gnome.org/GNOME/libxml2.git
