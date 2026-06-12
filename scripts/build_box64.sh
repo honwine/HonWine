@@ -6,18 +6,15 @@ source "$SCRIPT_DIR/env.sh"
 
 log "=== 构建 Box64 ==="
 
-BINARY="$BUILD_DIR/box64_build/box64"
-if [ -f "$BINARY" ]; then
-    log "Box64 已编译 ($BINARY)，跳过。需重编请删除此文件。"
-    exit 0
+# 应用补丁 (已应用则跳过)
+cd "$BOX64_SRC"
+git am --abort 2>/dev/null || true
+rm -rf "$ROOT/.git/modules/thirdparty/box64/rebase-apply" 2>/dev/null || true
+if ! git log --oneline -10 | grep -q "ohos:"; then
+    git am "$PATCHES_DIR/box64/"*.patch || true
 fi
 
-# 应用补丁
-log "应用 Box64 OHOS 补丁..."
-cd "$BOX64_SRC"
-git am "$PATCHES_DIR/box64/"*.patch 2>/dev/null || true
-
-# CMake 构建
+# CMake + Ninja (ninja 自行处理增量)
 mkdir -p "$BUILD_DIR/box64_build"
 cd "$BUILD_DIR/box64_build"
 cmake "$BOX64_SRC" \
@@ -30,4 +27,4 @@ cmake "$BOX64_SRC" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
 ninja box64
 
-log "Box64 构建完成: $BINARY"
+log "Box64 构建完成"

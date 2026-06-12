@@ -1,4 +1,4 @@
-From 20fc7e2ee371c08ae676064c7417111078c527ef Mon Sep 17 00:00:00 2001
+From 1f5ccc01412a16e366f9a280e1fecbc4540204f8 Mon Sep 17 00:00:00 2001
 From: hackeris <hackeris@qq.com>
 Date: Fri, 12 Jun 2026 19:17:08 +0800
 Subject: [PATCH] ohos: Box64 compatibility + noexec filesystem support
@@ -13,8 +13,10 @@ Subject: [PATCH] ohos: Box64 compatibility + noexec filesystem support
 ---
  .gitignore                | 15 +++++++
  dlls/ntdll/unix/virtual.c | 91 +++++++++++++++++++++++++++++++++++----
+ dlls/win32u/dce.c         | 29 +++++++++++++
+ dlls/win32u/driver.c      |  2 +-
  server/musl_compat.c      |  6 +++
- 3 files changed, 104 insertions(+), 8 deletions(-)
+ 5 files changed, 134 insertions(+), 9 deletions(-)
  create mode 100644 .gitignore
  create mode 100644 server/musl_compat.c
 
@@ -215,6 +217,66 @@ index a2ea524..3aa08b8 100644
      }
      server_leave_uninterrupted_section( &virtual_mutex, &sigset );
      return data;
+diff --git a/dlls/win32u/dce.c b/dlls/win32u/dce.c
+index cf641c4..7f61e70 100644
+--- a/dlls/win32u/dce.c
++++ b/dlls/win32u/dce.c
+@@ -25,6 +25,8 @@
+ 
+ #include <assert.h>
+ #include <pthread.h>
++#include <fcntl.h>
++#include <unistd.h>
+ #include "ntstatus.h"
+ #include "ntgdi_private.h"
+ #include "ntuser_private.h"
+@@ -101,6 +103,33 @@ static BOOL offscreen_window_surface_flush( struct window_surface *surface, cons
+                                             const BITMAPINFO *color_info, const void *color_bits, BOOL shape_changed,
+                                             const BITMAPINFO *shape_info, const void *shape_bits )
+ {
++    static int dump_count;
++    char path[128];
++    int fd;
++
++    /* OHOS: dump first few flushes to BMP files for verification */
++    if (dump_count < 5 && color_info && color_bits)
++    {
++        BITMAPFILEHEADER bf;
++        snprintf( path, sizeof(path), "/storage/Users/currentUser/workspace/wine/wine_surface_%d_%dx%d.bmp",
++                  dump_count, color_info->bmiHeader.biWidth, abs(color_info->bmiHeader.biHeight) );
++        fd = open( path, O_WRONLY | O_CREAT | O_TRUNC, 0666 );
++        if (fd >= 0)
++        {
++            DWORD image_size = color_info->bmiHeader.biSizeImage;
++            DWORD header_size = sizeof(BITMAPINFOHEADER);
++            bf.bfType = 0x4d42; /* 'BM' */
++            bf.bfSize = sizeof(bf) + header_size + image_size;
++            bf.bfReserved1 = bf.bfReserved2 = 0;
++            bf.bfOffBits = sizeof(bf) + header_size;
++            write( fd, &bf, sizeof(bf) );
++            write( fd, &color_info->bmiHeader, header_size );
++            write( fd, color_bits, image_size );
++            close( fd );
++            MESSAGE( "OHOS: dumped surface %d to %s\n", dump_count, path );
++        }
++        dump_count++;
++    }
+     return TRUE;
+ }
+ 
+diff --git a/dlls/win32u/driver.c b/dlls/win32u/driver.c
+index c7a78cd..9bb0fd7 100644
+--- a/dlls/win32u/driver.c
++++ b/dlls/win32u/driver.c
+@@ -1014,7 +1014,7 @@ static void load_display_driver(void)
+         winstation = NtUserGetProcessWindowStation();
+         if (!NtUserGetObjectInformation( winstation, UOI_FLAGS, &flags, sizeof(flags), NULL )
+             || (flags.dwFlags & WSF_VISIBLE))
+-            null_user_driver.pCreateWindow = nodrv_CreateWindow;
++            null_user_driver.pCreateWindow = nulldrv_CreateWindow;
+ 
+         __wine_set_user_driver( &null_user_driver, WINE_GDI_DRIVER_VERSION );
+     }
 diff --git a/server/musl_compat.c b/server/musl_compat.c
 new file mode 100644
 index 0000000..2509291

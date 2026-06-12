@@ -11,10 +11,6 @@ WINE_CFLAGS="-g -O2 -D__MUSL__ -D_GNU_SOURCE -DWINE_UNIX_LIB \
 
 build_native_tools() {
     log "--- Native 构建 (winegcc + PE DLLs) ---"
-    if [ -f "$WINE_SRC/build-native/tools/winegcc/winegcc" ]; then
-        log "Native 产物已存在，跳过"
-        return
-    fi
     mkdir -p "$WINE_SRC/build-native"
     cd "$WINE_SRC/build-native"
     ../configure --enable-win64 --disable-tests \
@@ -57,12 +53,16 @@ build_wineserver() {
         -D__ANDROID__ -DBINDIR=\"/opt/winebox/bin\" -DDATADIR=\"/opt/winebox/share\" \
         -fPIC $wine_include"
 
-    if [ -f "$out/wineserver" ]; then
-        log "wineserver 已编译，跳过"
-        return
-    fi
-
     mkdir -p "$out"
+    local need_rebuild=0
+    if [ ! -f "$out/wineserver" ]; then
+        need_rebuild=1
+    else
+        for f in $WINE_SRC/server/*.c; do
+            [ "$f" -nt "$out/wineserver" ] && { need_rebuild=1; break; }
+        done
+    fi
+    if [ $need_rebuild -eq 0 ]; then return; fi
     for f in $WINE_SRC/server/*.c; do
         $CLANG $srv_cflags -c -o "$out/$(basename "$f" .c).o" "$f"
     done
