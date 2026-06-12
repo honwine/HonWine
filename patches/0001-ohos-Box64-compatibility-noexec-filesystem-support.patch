@@ -1,4 +1,4 @@
-From b2cd68851f7506624e5854f8c3f3ed08203c1552 Mon Sep 17 00:00:00 2001
+From 20fc7e2ee371c08ae676064c7417111078c527ef Mon Sep 17 00:00:00 2001
 From: hackeris <hackeris@qq.com>
 Date: Fri, 12 Jun 2026 19:17:08 +0800
 Subject: [PATCH] ohos: Box64 compatibility + noexec filesystem support
@@ -12,9 +12,9 @@ Subject: [PATCH] ohos: Box64 compatibility + noexec filesystem support
 - .gitignore: exclude build dirs
 ---
  .gitignore                | 15 +++++++
- dlls/ntdll/unix/virtual.c | 89 +++++++++++++++++++++++++++++++++++----
+ dlls/ntdll/unix/virtual.c | 91 +++++++++++++++++++++++++++++++++++----
  server/musl_compat.c      |  6 +++
- 3 files changed, 102 insertions(+), 8 deletions(-)
+ 3 files changed, 104 insertions(+), 8 deletions(-)
  create mode 100644 .gitignore
  create mode 100644 server/musl_compat.c
 
@@ -40,7 +40,7 @@ index 0000000..618d1cd
 +*.swp
 +*~
 diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
-index dcaf76d..3aa08b8 100644
+index a2ea524..3aa08b8 100644
 --- a/dlls/ntdll/unix/virtual.c
 +++ b/dlls/ntdll/unix/virtual.c
 @@ -36,6 +36,7 @@
@@ -51,7 +51,16 @@ index dcaf76d..3aa08b8 100644
  #include <sys/ioctl.h>
  #ifdef HAVE_SYS_SYSINFO_H
  # include <sys/sysinfo.h>
-@@ -1941,9 +1942,23 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
+@@ -591,6 +592,8 @@ static void *anon_mmap_tryfixed( void *start, size_t size, int prot, int flags )
+ {
+     void *ptr;
+ 
++/* OHOS: Box64 wrapped mmap does not support MAP_FIXED_NOREPLACE */
++#undef MAP_FIXED_NOREPLACE
+ #ifdef MAP_FIXED_NOREPLACE
+     ptr = mmap( start, size, prot, MAP_FIXED_NOREPLACE | MAP_PRIVATE | MAP_ANON | flags, -1, 0 );
+ #elif defined(MAP_TRYFIXED)
+@@ -1939,9 +1942,23 @@ static inline int mprotect_exec( void *base, size_t size, int unix_prot )
      if (force_exec_prot && (unix_prot & PROT_READ) && !(unix_prot & PROT_EXEC))
      {
          TRACE( "forcing exec permission on %p-%p\n", base, (char *)base + size - 1 );
@@ -76,7 +85,7 @@ index dcaf76d..3aa08b8 100644
      }
  
      return mprotect( base, size, unix_prot );
-@@ -3172,10 +3187,40 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
+@@ -3170,10 +3187,40 @@ static NTSTATUS map_image_into_view( struct file_view *view, const UNICODE_STRIN
          end = file_start + file_size;
          if (sec[i].PointerToRawData >= st.st_size ||
              end > ((st.st_size + sector_align) & ~sector_align) ||
@@ -121,7 +130,7 @@ index dcaf76d..3aa08b8 100644
          {
              ERR_(module)( "Could not map %s section %.8s, file probably truncated\n",
                            debugstr_us(nt_name), sec[i].Name );
-@@ -4055,29 +4100,43 @@ TEB *virtual_alloc_first_teb(void)
+@@ -4053,29 +4100,43 @@ TEB *virtual_alloc_first_teb(void)
      SIZE_T total = 32 * block_size;
      struct thread_data *thread_data;
  
@@ -166,7 +175,7 @@ index dcaf76d..3aa08b8 100644
      return teb;
  }
  
-@@ -4138,15 +4197,29 @@ struct thread_data *virtual_alloc_thread_data(void)
+@@ -4136,15 +4197,29 @@ struct thread_data *virtual_alloc_thread_data(void)
  {
      NTSTATUS status;
      sigset_t sigset;
@@ -197,7 +206,7 @@ index dcaf76d..3aa08b8 100644
          data->request_fd = -1;
          data->reply_fd   = -1;
          data->wait_fd[0] = -1;
-@@ -4155,7 +4228,7 @@ struct thread_data *virtual_alloc_thread_data(void)
+@@ -4153,7 +4228,7 @@ struct thread_data *virtual_alloc_thread_data(void)
  #ifdef VALGRIND_STACK_REGISTER
          VALGRIND_STACK_REGISTER( (char *)data + signal_stack_mask + 1, (char *)data + view->size );
  #endif

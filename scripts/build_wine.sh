@@ -45,7 +45,7 @@ build_ohos_unix() {
     make -k -j$JOBS \
         CC="$CLANG --target=$TARGET --sysroot=$SYSROOT" \
         CFLAGS="$WINE_CFLAGS" \
-        LDFLAGS="-fuse-ld=lld --sysroot=$SYSROOT --target=$TARGET"
+        LDFLAGS="-fuse-ld=lld --sysroot=$SYSROOT --target=$TARGET" || true
 }
 
 build_wineserver() {
