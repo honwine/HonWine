@@ -13,9 +13,11 @@ build_native_tools() {
     log "--- Native 构建 (winegcc + PE DLLs) ---"
     mkdir -p "$WINE_SRC/build-native"
     cd "$WINE_SRC/build-native"
-    ../configure --enable-win64 --disable-tests \
-        --without-x --without-freetype --without-alsa \
-        --without-opengl --without-vulkan
+    if [ ! -f "Makefile" ]; then
+        ../configure --enable-win64 --disable-tests \
+            --without-x --without-freetype --without-alsa \
+            --without-opengl --without-vulkan
+    fi
     make -j$JOBS
 }
 
