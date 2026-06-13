@@ -57,17 +57,32 @@ for exe in "$WINE_SRC/build-native/programs/"*/x86_64-windows/*.exe; do
 done
 log "  *.exe stubs: $(ls "$BIN"/*.exe 2>/dev/null | wc -l) files"
 
-# ---- libc + libz + FreeType + NLS + wine.inf + fonts ----
+# ---- libc + 交叉编译依赖 + NLS + wine.inf + fonts ----
 cp "$SYSROOT/usr/lib/x86_64-linux-ohos/libc.so" "$HNP_LAYOUT/lib/x86_64/"
-# FreeType + libz 放到 x86_64-unix/，和 win32u.so (dlopen 调用者) 同级
-cp "$SYSROOT/usr/lib/x86_64-linux-ohos/libz.so" "$HNP_LAYOUT/bin/x86_64-unix/"
-if [ -f "$BUILD_DIR/freetype_build/install/lib/libfreetype.so.6.20.2" ]; then
-    cp "$BUILD_DIR/freetype_build/install/lib/libfreetype.so.6.20.2" "$HNP_LAYOUT/bin/x86_64-unix/libfreetype.so"
-    cp "$BUILD_DIR/freetype_build/install/lib/libfreetype.so.6.20.2" "$HNP_LAYOUT/bin/x86_64-unix/libfreetype.so.6"
-    log "  FreeType + libz → bin/x86_64-unix/"
-else
-    warn "FreeType .so 未找到，字体渲染将不可用"
-fi
+
+# 交叉编译依赖 → bin/x86_64-unix/ (文件名 = ELF SONAME)
+# 来源: sysroot-ext (标准) 或 SDK sysroot (回退, 旧版)
+pick_lib() {
+    local name="$1"
+    local soname="$2"
+    if [ -f "$SYSROOT_EXT_LIB/$soname" ]; then
+        cp "$SYSROOT_EXT_LIB/$soname" "$HNP_LAYOUT/bin/x86_64-unix/$soname"
+    elif [ -f "$SYSROOT/usr/lib/x86_64-linux-ohos/$name" ]; then
+        cp "$SYSROOT/usr/lib/x86_64-linux-ohos/$name" "$HNP_LAYOUT/bin/x86_64-unix/$soname"
+    else
+        warn "$soname 未找到"
+    fi
+}
+
+pick_lib "libfreetype.so.6.20.2"        "libfreetype.so.6"
+pick_lib "libz.so"                      "libz.so"
+pick_lib "libwayland-client.so.0.22.0"  "libwayland-client.so.0"
+pick_lib "libxkbcommon.so.0.0.0"        "libxkbcommon.so.0"
+pick_lib "libxkbregistry.so.0.0.0"      "libxkbregistry.so.0"
+pick_lib "libxml2.so.2.12.0"            "libxml2.so.2"
+pick_lib "libffi.so.8.1.4"              "libffi.so.8"
+log "  交叉编译依赖 → bin/x86_64-unix/"
+
 # Wine 内置字体 (TrueType)
 mkdir -p "$HNP_LAYOUT/share/wine/fonts"
 cp "$WINE_SRC/fonts/"*.ttf "$HNP_LAYOUT/share/wine/fonts/"

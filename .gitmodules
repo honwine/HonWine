@@ -19,3 +19,6 @@
 [submodule "thirdparty/libxml2"]
 	path = thirdparty/libxml2
 	url = https://gitlab.gnome.org/GNOME/libxml2.git
+[submodule "thirdparty/freetype"]
+	path = thirdparty/freetype
+	url = https://github.com/freetype/freetype.git

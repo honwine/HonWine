@@ -1,15 +1,24 @@
 #!/bin/bash
-# build_freetype.sh — FreeType 交叉编译 (x86_64-linux-ohos)
+# build_freetype.sh — FreeType 交叉编译 → sysroot-ext
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
 
-FT_SRC="$ROOT/thirdparty/freetype-VER-2-13-3"
+FT_SRC="$ROOT/thirdparty/freetype"
 FT_BUILD="$BUILD_DIR/freetype_build"
-FT_INSTALL="$FT_BUILD/install"
 
 log "=== 构建 FreeType (x86_64) ==="
 
+if [ -f "$SYSROOT_EXT_LIB/libfreetype.so.6" ] \
+   && [ -d "$SYSROOT_EXT_INC/freetype2" ] \
+   && [ -f "$SYSROOT_EXT_PC/freetype2.pc" ]; then
+    log "FreeType 已就绪，跳过"
+    exit 0
+fi
+
+rm -rf "$FT_BUILD"
+
+mkdir -p "$SYSROOT_EXT_INC" "$SYSROOT_EXT_LIB" "$SYSROOT_EXT_PC"
 mkdir -p "$FT_BUILD"
 cd "$FT_BUILD"
 
@@ -23,12 +32,25 @@ cmake "$FT_SRC" \
     -DFT_DISABLE_HARFBUZZ=ON \
     -DFT_DISABLE_PNG=ON \
     -DFT_DISABLE_BZIP2=ON \
-    -DCMAKE_INSTALL_PREFIX="$FT_INSTALL"
+    -DBUILD_SHARED_LIBS=ON \
+    -DCMAKE_INSTALL_PREFIX="$FT_BUILD/install"
 
 ninja
 ninja install
 
-log "FreeType 构建完成: $FT_INSTALL"
-echo "  include: $FT_INSTALL/include/freetype2"
-echo "  lib:     $(ls "$FT_INSTALL"/lib*/libfreetype* 2>/dev/null)"
-echo "  export FT_INSTALL=$FT_INSTALL"
+# 安装到 sysroot-ext (文件名 = SONAME)
+cp "$FT_BUILD"/install/lib/libfreetype.so.6.20.2 "$SYSROOT_EXT_LIB/libfreetype.so.6"
+cp -r "$FT_BUILD"/install/include/freetype2 "$SYSROOT_EXT_INC/"
+cat > "$SYSROOT_EXT_PC/freetype2.pc" << EOF
+prefix=$SYSROOT_EXT/usr
+includedir=\${prefix}/include
+libdir=\${prefix}/lib/x86_64-linux-ohos
+
+Name: FreeType 2
+Description: A free, high-quality, and portable font engine.
+Version: 2.13.3
+Libs: -L\${libdir} -lfreetype
+Cflags: -I\${includedir}/freetype2
+EOF
+
+log "FreeType → sysroot-ext ($SYSROOT_EXT_LIB/libfreetype.so.6)"
