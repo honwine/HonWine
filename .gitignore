@@ -26,8 +26,12 @@ Thumbs.db
 build/
 out/
 
-# HAP project (separate repo)
-HonWine/
+# HAP build outputs
+HonWine/entry/build/
+HonWine/entry/.cxx/
+HonWine/.hvigor/
+HonWine/entry/oh_modules/
+HonWine/entry/hnp/
 
 # Third-party submodule build artifacts
 thirdparty/wine/build-*/

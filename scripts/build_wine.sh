@@ -14,6 +14,22 @@ build_native_tools() {
     mkdir -p "$WINE_SRC/build-native"
     cd "$WINE_SRC/build-native"
     if [ ! -f "Makefile" ]; then
+        # 用 cache variables 模拟 Wayland 检测, 避免在 host 上安装 libwayland-dev 等
+        export ac_cv_header_wayland_client_h=yes
+        export ac_cv_lib_wayland_client_wl_display_connect=yes
+        export WAYLAND_CLIENT_CFLAGS="-I/usr/local/include"
+        export WAYLAND_CLIENT_LIBS="-L/usr/local/lib/x86_64-linux-gnu -lwayland-client"
+        export ac_cv_header_xkbcommon_xkbcommon_h=yes
+        export ac_cv_lib_xkbcommon_xkb_context_new=yes
+        export ac_cv_lib_soname_xkbcommon="libxkbcommon.so.0"
+        export XKBCOMMON_CFLAGS="-I/usr/include"
+        export XKBCOMMON_LIBS="-lxkbcommon"
+        export ac_cv_header_xkbcommon_xkbregistry_h=yes
+        export ac_cv_lib_xkbregistry_rxkb_context_new=yes
+        export ac_cv_lib_soname_xkbregistry="libxkbregistry.so.0"
+        export XKBREGISTRY_CFLAGS="-I/usr/include"
+        export XKBREGISTRY_LIBS="-lxkbregistry"
+        export WAYLAND_SCANNER=/usr/local/bin/wayland-scanner
         ../configure --enable-win64 --disable-tests \
             --without-x --without-freetype --without-alsa \
             --without-opengl --without-vulkan

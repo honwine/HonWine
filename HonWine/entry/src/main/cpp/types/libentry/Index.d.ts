@@ -1,0 +1,11 @@
+export const startServer: (sockPath: string) => boolean;
+export const launchClient: (exePath: string, argv: string[], sockPath: string, libPath: string) => number;
+export const stopClient: () => void;
+export const stopAll: () => void;
+export const setStateCallback: (cb: (state: string) => void) => void;
+export const initXComponent: () => void;
+export const runMmapTests: () => string;
+export const termRun: (cols: number, rows: number, cb: (data: ArrayBuffer) => void, onExit: () => void) => number;
+export const termSend: (data: ArrayBuffer) => void;
+export const termResize: (cols: number, rows: number) => void;
+export const termClose: () => void;

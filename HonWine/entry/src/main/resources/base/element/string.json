@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "module description"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "description"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "label"
+    },
+    {
+      "name": "download_permission",
+      "value": "Access ~/Download"
+    },
+    {
+      "name": "documents_permission",
+      "value": "Access ~/Documents"
+    }
+  ]
+}
