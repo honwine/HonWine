@@ -65,16 +65,23 @@ cp "$SYSROOT/usr/lib/x86_64-linux-ohos/libc.so" "$HNP_LAYOUT/lib/x86_64/"
 pick_lib() {
     local name="$1"
     local soname="$2"
+    local linker="${3:-}"
+    local dest="$HNP_LAYOUT/bin/x86_64-unix"
     if [ -f "$SYSROOT_EXT_LIB/$soname" ]; then
-        cp "$SYSROOT_EXT_LIB/$soname" "$HNP_LAYOUT/bin/x86_64-unix/$soname"
+        cp "$SYSROOT_EXT_LIB/$soname" "$dest/$soname"
     elif [ -f "$SYSROOT/usr/lib/x86_64-linux-ohos/$name" ]; then
-        cp "$SYSROOT/usr/lib/x86_64-linux-ohos/$name" "$HNP_LAYOUT/bin/x86_64-unix/$soname"
+        cp "$SYSROOT/usr/lib/x86_64-linux-ohos/$name" "$dest/$soname"
     else
         warn "$soname 未找到"
+        return 0
+    fi
+    # 创建无版本号别名 (dlopen("libfoo.so") 按名查找需要, 不能用 symlink)
+    if [ -n "$linker" ] && [ ! -f "$dest/$linker" ]; then
+        cp "$dest/$soname" "$dest/$linker"
     fi
 }
 
-pick_lib "libfreetype.so.6.20.2"        "libfreetype.so.6"
+pick_lib "libfreetype.so.6.20.2"        "libfreetype.so.6"   "libfreetype.so"
 pick_lib "libz.so"                      "libz.so"
 pick_lib "libwayland-client.so.0.22.0"  "libwayland-client.so.0"
 pick_lib "libxkbcommon.so.0.0.0"        "libxkbcommon.so.0"
@@ -82,6 +89,10 @@ pick_lib "libxkbregistry.so.0.0.0"      "libxkbregistry.so.0"
 pick_lib "libxml2.so.2.12.0"            "libxml2.so.2"
 pick_lib "libffi.so.8.1.4"              "libffi.so.8"
 log "  交叉编译依赖 → bin/x86_64-unix/"
+
+# libfreetype 需要同时放在 bin/ (Box64 按名 dlopen 搜索路径: .)
+cp "$HNP_LAYOUT/bin/x86_64-unix/libfreetype.so.6" "$BIN/"
+cp "$HNP_LAYOUT/bin/x86_64-unix/libfreetype.so" "$BIN/"
 
 # Wine 内置字体 (TrueType)
 mkdir -p "$HNP_LAYOUT/share/wine/fonts"
@@ -95,7 +106,7 @@ cat > "$BIN/wine.sh" << 'SCRIPT'
 #!/bin/sh
 DIR="$(cd "$(dirname "$0")" && pwd)"
 export WINEPREFIX="${WINEPREFIX:-$HOME/.wine}"
-export BOX64_LD_LIBRARY_PATH="$DIR:$DIR/../lib/x86_64"
+export BOX64_LD_LIBRARY_PATH="$DIR:$DIR/x86_64-unix:$DIR/../lib/x86_64"
 exec "$DIR/box64" "$DIR/wine" "$@"
 SCRIPT
 chmod +x "$BIN/wine.sh"
