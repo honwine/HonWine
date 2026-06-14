@@ -102,6 +102,9 @@ mkdir -p "$HNP_LAYOUT/share/wine/fonts"
 cp "$WINE_SRC/fonts/"*.ttf "$HNP_LAYOUT/share/wine/fonts/"
 log "  fonts: $(ls "$HNP_LAYOUT/share/wine/fonts" | wc -l) .ttf files"
 cp "$WINE_SRC/build-native/nls/"*.nls "$HNP_LAYOUT/share/wine/nls/"
+mkdir -p "$HNP_LAYOUT/share/wine/winmd"
+cp "$WINE_SRC/build-native/include/"*.winmd "$HNP_LAYOUT/share/wine/winmd/"
+log "  winmd: $(ls "$HNP_LAYOUT/share/wine/winmd" | wc -l) .winmd files"
 cp "$WINE_SRC/build-native/loader/wine.inf" "$HNP_LAYOUT/share/wine/"
 
 # ---- 启动脚本 ----

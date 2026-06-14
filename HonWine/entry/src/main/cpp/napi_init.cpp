@@ -272,13 +272,43 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
 
     if (wsPid > 0) {
         OH_LOG_INFO(LOG_APP, "[Launch] wineserver pid=%{public}d, 等待初始化...", wsPid);
-        // 给 wineserver 时间初始化 socket
         usleep(1500000); // 1.5s
-        // 确认 wineserver 还活着 (kill(pid,0) 只检查不杀, 不阻塞)
-        if (kill(wsPid, 0) == 0) {
-            OH_LOG_INFO(LOG_APP, "[Launch] wineserver alive (pid=%{public}d)", wsPid);
-        } else {
-            OH_LOG_ERROR(LOG_APP, "[Launch] wineserver DEAD! kill(pid,0) errno=%{public}d", errno);
+    }
+
+    // ── 先独立运行 wineboot --init，等前缀初始化完成 ──
+    {
+        OH_LOG_INFO(LOG_APP, "[Launch] running wineboot --init...");
+        pid_t bootPid = fork();
+        if (bootPid == 0) {
+            CloseInheritedFds(STDOUT_FILENO, STDERR_FILENO);
+            for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
+            prctl(PR_SET_NAME, "wl-wineboot", 0, 0, 0);
+            chdir(wineboxBin.c_str());
+            const char* bootArgv[] = {"./box64", "./wine", "./wineboot", "--init", nullptr};
+            int bootFd = open("/storage/Users/currentUser/workspace/wine/wineboot_logs.txt",
+                              O_WRONLY|O_CREAT|O_TRUNC, 0644);
+            if (bootFd >= 0) dup2(bootFd, STDERR_FILENO);
+            execve("./box64", (char* const*)bootArgv, (char* const*)envp);
+            fprintf(stderr, "wineboot execve failed: %s\n", strerror(errno));
+            _exit(127);
+        }
+        if (bootPid > 0) {
+            int bootStatus = 0;
+            for (int i = 0; i < 300; i++) {
+                pid_t wr = waitpid(bootPid, &bootStatus, WNOHANG);
+                if (wr > 0) break;
+                if (wr < 0 && errno != EINTR) break;
+                if (i > 0 && i % 30 == 0)
+                    OH_LOG_INFO(LOG_APP, "[Launch] wineboot --init still running (%{public}ds)...", i);
+                sleep(1);
+            }
+            if (kill(bootPid, 0) == 0) {
+                OH_LOG_WARN(LOG_APP, "[Launch] wineboot --init timeout (300s), killing");
+                kill(bootPid, SIGKILL);
+                waitpid(bootPid, &bootStatus, 0);
+            }
+            int code = WIFEXITED(bootStatus) ? WEXITSTATUS(bootStatus) : -1;
+            OH_LOG_INFO(LOG_APP, "[Launch] wineboot --init done, exit=%{public}d", code);
         }
     }
 
