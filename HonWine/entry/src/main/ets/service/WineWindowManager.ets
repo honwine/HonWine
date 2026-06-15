@@ -17,8 +17,10 @@ export class WineWindowManager {
   private windowStage: window.WindowStage | null = null;
   private mainWindow: window.Window | null = null;
   private toplevels: Map<number, ToplevelInfo> = new Map();
-  // 设备显示密度 (用于缩放子窗口, 匹配主窗口的物理大小)
+  // 设备显示密度 + 屏幕尺寸 (用于缩放和居中子窗口)
   private displayScale: number = 1.0;
+  private displayWidth: number = 1920;
+  private displayHeight: number = 1080;
   // 子窗口创建完成前到达的 pending 事件 (key: toplevelId)
   private pendingEvents: Map<number, Array<[string, string]>> = new Map();
 
@@ -41,7 +43,10 @@ export class WineWindowManager {
     try {
       const d = display.getDefaultDisplaySync();
       this.displayScale = d.densityPixels;
-      hilog.info(DOMAIN, 'WineWM', '[MW] display densityPixels=%{public}f', this.displayScale);
+      this.displayWidth = d.width;
+      this.displayHeight = d.height;
+      hilog.info(DOMAIN, 'WineWM', '[MW] display %{public}dx%{public}d scale=%{public}s',
+        this.displayWidth, this.displayHeight, this.displayScale.toFixed(2));
     } catch (_) {
       this.displayScale = 1.0;
     }
@@ -53,7 +58,7 @@ export class WineWindowManager {
       this.onToplevelEvent(id, event, data);
     });
 
-    hilog.info(DOMAIN, 'WineWM', '[MW] initialized scale=%{public}f', this.displayScale);
+    hilog.info(DOMAIN, 'WineWM', '[MW] initialized scale=%{public}s', this.displayScale.toFixed(2));
   }
 
   private onToplevelEvent(id: number, event: string, data: string): void {
@@ -105,8 +110,8 @@ export class WineWindowManager {
         // 按设备密度缩放 + 补偿标题栏高度
         const scaledW = Math.round(w * this.displayScale);
         const scaledH = Math.round(h * this.displayScale + info.titleBarOffset);
-        hilog.info(DOMAIN, 'WineWM', '[MW] resizing sub-window #%{public}d: frame=%{public}dx%{public}d → window=%{public}dx%{public}d (scale=%{public}f +offset=%{public}d)',
-          id, w, h, scaledW, scaledH, this.displayScale, info.titleBarOffset);
+        hilog.info(DOMAIN, 'WineWM', '[MW] resizing sub-window #%{public}d: frame=%{public}dx%{public}d → window=%{public}dx%{public}d (scale=%{public}s +offset=%{public}d)',
+          id, w, h, scaledW, scaledH, this.displayScale.toFixed(2), info.titleBarOffset);
         info.subWindow.resize(scaledW, scaledH);
       }
     } catch (_) { /* ignore parse error */ }
@@ -134,8 +139,8 @@ export class WineWindowManager {
       const scaledW = Math.round(w * this.displayScale);
       const scaledH = Math.round(h * this.displayScale);
 
-      hilog.info(DOMAIN, 'WineWM', '[MW] creating sub-window #%{public}d: %{public}s %{public}dx%{public}d (scaled: %{public}dx%{public}d, scale=%{public}f)',
-        id, title, w, h, scaledW, scaledH, this.displayScale);
+      hilog.info(DOMAIN, 'WineWM', '[MW] creating sub-window #%{public}d: %{public}s %{public}dx%{public}d (scaled: %{public}dx%{public}d, scale=%{public}s)',
+        id, title, w, h, scaledW, scaledH, this.displayScale.toFixed(2));
 
       // 关键! 先设置 pending toplevel, 子窗口 XComponent OnSurfaceCreated 时才能正确路由
       testNapi.setPendingToplevel(id);
@@ -180,6 +185,17 @@ export class WineWindowManager {
           hilog.info(DOMAIN, 'WineWM', '[MW] sub-window #%{public}d corner radius set to 0', id);
         } catch (_) {
           hilog.warn(DOMAIN, 'WineWM', '[MW] sub-window #%{public}d setWindowCornerRadius not supported', id);
+        }
+
+        // 窗口居中 (避免从左上角弹出)
+        try {
+          const cx = Math.round((this.displayWidth - scaledW) / 2);
+          const cy = Math.round((this.displayHeight - scaledH) / 2);
+          await info.subWindow.moveWindowTo(cx > 0 ? cx : 0, cy > 0 ? cy : 0);
+          hilog.info(DOMAIN, 'WineWM', '[MW] sub-window #%{public}d centered: (%{public}d,%{public}d) display=%{public}dx%{public}d win=%{public}dx%{public}d',
+            id, cx, cy, this.displayWidth, this.displayHeight, scaledW, scaledH);
+        } catch (_) {
+          hilog.warn(DOMAIN, 'WineWM', '[MW] sub-window #%{public}d moveWindowTo failed', id);
         }
 
         // 所有就绪后再显示 (避免默认大小→resize 的闪烁)
