@@ -50,22 +50,25 @@ void PluginManager::OnSurfaceCreated(OH_NativeXComponent* component, void* windo
     uint64_t w = 0, h = 0;
     OH_NativeXComponent_GetXComponentSize(component, window, &w, &h);
     auto* self = GetInstance();
-    OH_LOG_INFO(LOG_APP, "[MW-Surface] created %{public}llux%{public}llu pendingToplevel=%{public}u",
-                w, h, self->pendingToplevelId_);
+    uint32_t tid = self->pendingToplevelId_;
+    OH_LOG_INFO(LOG_APP, "[MW-Surface] created %{public}llux%{public}llu pendingToplevel=%{public}u window=%{public}p component=%{public}p",
+                w, h, tid, window, component);
 
-    if (self->pendingToplevelId_ != 0) {
-        // 子窗口: 独立 EGLContext (避免多线程共享 context 导致渲染交错)
-        uint32_t tid = self->pendingToplevelId_;
+    if (tid != 0) {
+        // 子窗口: 独立 EGLContext
         self->pendingToplevelId_ = 0;
 
         auto r = std::make_unique<EglRenderer>();
-        r->Init(reinterpret_cast<OHNativeWindow*>(window), (int)w, (int)h);
-        r->SetToplevelId(tid);
-        self->toplevelRenderers_[tid] = std::move(r);
-        OH_LOG_INFO(LOG_APP, "[MW-Surface] toplevel #%{public}u renderer created", tid);
+        OH_LOG_INFO(LOG_APP, "[MW-Surface] creating EglRenderer for toplevel #%{public}u (%{public}llux%{public}llu)...", tid, w, h);
+        if (r->Init(reinterpret_cast<OHNativeWindow*>(window), (int)w, (int)h)) {
+            r->SetToplevelId(tid);
+            self->toplevelRenderers_[tid] = std::move(r);
+            OH_LOG_INFO(LOG_APP, "[MW-Surface] ✓ toplevel #%{public}u renderer created (total=%{public}zu)", tid, self->toplevelRenderers_.size());
+        } else {
+            OH_LOG_ERROR(LOG_APP, "[MW-Surface] ✗ toplevel #%{public}u EglRenderer::Init FAILED", tid);
+        }
     } else {
-        // 无 toplevel = 旧主窗口 XComponent (已废弃, 不再使用)
-        OH_LOG_WARN(LOG_APP, "[MW-Surface] no pending toplevel, skipping primary renderer");
+        OH_LOG_WARN(LOG_APP, "[MW-Surface] no pending toplevel (tid=0), skipping — old main XComponent?");
     }
 }
 

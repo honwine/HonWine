@@ -9,9 +9,10 @@ struct WineWindow {
   controller: XComponentController = new XComponentController();
 
   aboutToAppear(): void {
-    hilog.info(DOMAIN, 'WineWindow', 'sub-window page loaded, registering XComponent');
+    hilog.info(DOMAIN, 'WineWindow', 'aboutToAppear: calling initXComponent...');
     // 注册子窗口 XComponent 的 native callback（PluginManager::Export 会获取当前 exports 上的 XComponent）
     testNapi.initXComponent();
+    hilog.info(DOMAIN, 'WineWindow', 'aboutToAppear: initXComponent returned ✓');
   }
 
   build() {

@@ -40,6 +40,10 @@ public:
     // 生成唯一 toplevel ID
     uint32_t NextToplevelId() { return nextToplevelId_++; }
 
+    // toplevel resource 映射 (用于 SendToplevelClose → xdg_toplevel_send_close)
+    void RegisterToplevelResource(uint32_t toplevelId, wl_resource* tl);
+    void SendToplevelClose(uint32_t toplevelId);
+
     // ── wayland 协议实现 ──
     static void compositor_bind(wl_client*, void*, uint32_t, uint32_t);
     static void compositor_create_surface(wl_client*, wl_resource*, uint32_t);
@@ -112,6 +116,8 @@ private:
     ToplevelCb toplevelCb_;
     std::atomic<bool> firstFrame_{false};
     std::atomic<uint32_t> nextToplevelId_{1};
+    std::unordered_map<uint32_t, wl_resource*> toplevelResources_;
+    std::mutex toplevelResMutex_;
 };
 
 // wl_surface 的每个实例携带的数据

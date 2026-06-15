@@ -90,6 +90,8 @@ static void xs_get_toplevel(wl_client* client, wl_resource* xsRes, uint32_t id) 
             sd->hasToplevel = true;
             sd->toplevelId = WaylandServer::GetInstance()->NextToplevelId();
             OH_LOG_INFO(LOG_APP, "[MW] xs_get_toplevel -> id=%{public}u (first toplevel for this surface)", sd->toplevelId);
+            // 注册 toplevel resource (用于 SendToplevelClose)
+            WaylandServer::GetInstance()->RegisterToplevelResource(sd->toplevelId, tl);
             WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "created",
                 "{\"w\":640,\"h\":480}");
         }

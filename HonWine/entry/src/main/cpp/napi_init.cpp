@@ -982,14 +982,15 @@ static napi_value DestroyToplevel(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-// ── NAPI: sendToplevelClose ── (通知 Wine 关闭窗口) ──
+// ── NAPI: sendToplevelClose ── (通知 Wine 关闭窗口)
 static napi_value SendToplevelClose(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     uint32_t id = 0;
     napi_get_value_uint32(env, args[0], &id);
-    OH_LOG_INFO(LOG_APP, "[MW-NAPI] sendToplevelClose id=%{public}u (stub)", id);
+    OH_LOG_INFO(LOG_APP, "[MW-NAPI] sendToplevelClose id=%{public}u", id);
+    WaylandServer::GetInstance()->SendToplevelClose(id);
     return nullptr;
 }
 

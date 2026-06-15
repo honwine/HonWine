@@ -43,18 +43,20 @@ bool EglRenderer::Init(OHNativeWindow* window, int w, int h) {
     width_ = w;
     height_ = h;
 
+    OH_LOG_INFO(LOG_APP, "[EGL] Init tl=%{public}u req=%{public}dx%{public}d", toplevelId_, w, h);
+
     // 1. EGL display + context
     display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (display_ == EGL_NO_DISPLAY) {
-        OH_LOG_ERROR(LOG_APP, "[EGL] eglGetDisplay failed");
+        OH_LOG_ERROR(LOG_APP, "[EGL] eglGetDisplay failed tl=%{public}u", toplevelId_);
         return false;
     }
     EGLint major, minor;
     if (!eglInitialize(display_, &major, &minor)) {
-        OH_LOG_ERROR(LOG_APP, "[EGL] eglInitialize failed: 0x%{public}x", eglGetError());
+        OH_LOG_ERROR(LOG_APP, "[EGL] eglInitialize failed tl=%{public}u: 0x%{public}x", toplevelId_, eglGetError());
         return false;
     }
-    OH_LOG_INFO(LOG_APP, "[EGL] %{public}d.%{public}d (primary)", major, minor);
+    OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u EGL %{public}d.%{public}d", toplevelId_, major, minor);
 
     EGLConfig cfg;
     EGLint nCfg;
@@ -73,18 +75,19 @@ bool EglRenderer::Init(OHNativeWindow* window, int w, int h) {
     surface_ = eglCreateWindowSurface(display_, cfg,
                                        reinterpret_cast<EGLNativeWindowType>(window_), nullptr);
     if (surface_ == EGL_NO_SURFACE) {
-        OH_LOG_ERROR(LOG_APP, "[EGL] eglCreateWindowSurface failed: 0x%{public}x", eglGetError());
+        OH_LOG_ERROR(LOG_APP, "[EGL] eglCreateWindowSurface failed tl=%{public}u: 0x%{public}x", toplevelId_, eglGetError());
         return false;
     }
     {
         EGLint sw = 0, sh = 0;
         eglQuerySurface(display_, surface_, EGL_WIDTH, &sw);
         eglQuerySurface(display_, surface_, EGL_HEIGHT, &sh);
-        OH_LOG_INFO(LOG_APP, "[EGL-Init] primary: req=%{public}dx%{public}d eglSurface=%{public}dx%{public}d", w, h, sw, sh);
+        OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u eglSurface %{public}dx%{public}d", toplevelId_, sw, sh);
     }
 
     running_ = true;
     thread_ = std::thread(&EglRenderer::RenderLoop, this);
+    OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u Init done, render thread started ✓", toplevelId_);
     return true;
 }
 
@@ -124,6 +127,9 @@ void EglRenderer::RenderLoop() {
     std::vector<uint8_t> px;
     int fw = 0, fh = 0;
     int loopCount = 0;
+    bool firstFrameLogged = false;
+
+    OH_LOG_INFO(LOG_APP, "[MW-RNDR] tl=%{public}u render loop started", toplevelId_);
 
     while (running_) {
         bool haveFrame = false;
@@ -134,6 +140,11 @@ void EglRenderer::RenderLoop() {
         }
 
         if (haveFrame && fw > 0 && fh > 0) {
+            if (!firstFrameLogged) {
+                OH_LOG_INFO(LOG_APP, "[MW-RNDR] tl=%{public}u ▶ FIRST FRAME %{public}dx%{public}d px=%{public}zu",
+                            toplevelId_, fw, fh, px.size());
+                firstFrameLogged = true;
+            }
             glBindTexture(GL_TEXTURE_2D, texture_);
             int rowLen = (int)px.size() / fh / 4;
             if (rowLen != fw) {

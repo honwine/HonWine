@@ -24,7 +24,7 @@ export default class EntryAbility extends UIAbility {
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
 
     // 初始化多窗口管理器
-    WineWindowManager.getInstance().init(windowStage);
+    WineWindowManager.getInstance().init(windowStage, this.context);
 
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {

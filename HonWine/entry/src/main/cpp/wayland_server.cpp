@@ -1,6 +1,7 @@
 #include "wayland_server.h"
 #include "fps_counter.h"
 #include "include/viewporter-server-protocol.h"
+#include "include/xdg-shell-server-protocol.h"
 #include <cstring>
 #include <ctime>
 #include <cerrno>
@@ -380,4 +381,28 @@ bool WaylandServer::TakeToplevelFrame(uint32_t id, std::vector<uint8_t>& out, in
 void WaylandServer::FireToplevelEvent(uint32_t id, const char* event, const char* jsonData) {
     OH_LOG_INFO(LOG_APP, "[MW] FireToplevel id=%{public}u event=%{public}s data=%{public}s", id, event, jsonData);
     if (toplevelCb_) toplevelCb_(id, event, jsonData);
+}
+
+void WaylandServer::RegisterToplevelResource(uint32_t toplevelId, wl_resource* tl) {
+    std::lock_guard<std::mutex> lk(toplevelResMutex_);
+    toplevelResources_[toplevelId] = tl;
+    OH_LOG_INFO(LOG_APP, "[MW] RegisterToplevelResource id=%{public}u tl=%{public}p", toplevelId, tl);
+}
+
+void WaylandServer::SendToplevelClose(uint32_t toplevelId) {
+    wl_resource* tl = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(toplevelResMutex_);
+        auto it = toplevelResources_.find(toplevelId);
+        if (it != toplevelResources_.end()) {
+            tl = it->second;
+            toplevelResources_.erase(it);
+        }
+    }
+    if (tl) {
+        OH_LOG_INFO(LOG_APP, "[MW] SendToplevelClose id=%{public}u → xdg_toplevel_send_close", toplevelId);
+        xdg_toplevel_send_close(tl);
+    } else {
+        OH_LOG_WARN(LOG_APP, "[MW] SendToplevelClose id=%{public}u NOT found", toplevelId);
+    }
 }
