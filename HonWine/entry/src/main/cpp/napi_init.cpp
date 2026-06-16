@@ -27,7 +27,7 @@
 #define LOG_TAG "WL_NAPI"
 #include <hilog/log.h>
 
-// ── 全局状态 ──
+// -- 全局状态 --
 static pid_t gClientPid = -1;
 static std::atomic<bool> gReaderRunning{false};
 static napi_threadsafe_function gStateTsfn = nullptr;
@@ -36,7 +36,7 @@ static napi_env gEnv = nullptr;
 static napi_ref gExports = nullptr;
 static std::mutex gExportsMutex;
 
-// ── fork/exec 后关闭继承的 fd ──
+// -- fork/exec 后关闭继承的 fd --
 static void CloseInheritedFds(int keep1, int keep2) {
     DIR* d = opendir("/proc/self/fd");
     if (!d) return;
@@ -49,7 +49,7 @@ static void CloseInheritedFds(int keep1, int keep2) {
     closedir(d);
 }
 
-// ── 客户端 stdout/stderr 读取线程 ──
+// -- 客户端 stdout/stderr 读取线程 --
 static void ReaderThread(int fd) {
     char buf[2048];
     std::string pending;
@@ -89,7 +89,7 @@ static void ReaderThread(int fd) {
     }
 }
 
-// ── State 回调 → ArkTS ──
+// -- State 回调 -> ArkTS --
 static void CallJsState(napi_env env, napi_value cb, void*, void* data) {
     char* msg = static_cast<char*>(data);
     if (env && cb && msg) {
@@ -101,7 +101,7 @@ static void CallJsState(napi_env env, napi_value cb, void*, void* data) {
     free(msg);
 }
 
-// ── NAPI: setStateCallback ──
+// -- NAPI: setStateCallback --
 static napi_value SetStateCallback(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -125,7 +125,7 @@ static napi_value SetStateCallback(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-// ── NAPI: startServer ──
+// -- NAPI: startServer --
 static napi_value StartServer(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -151,7 +151,7 @@ static napi_value StartServer(napi_env env, napi_callback_info info) {
     return r;
 }
 
-// ── NAPI: launchClient (异步: wineserver→wineboot→wine 在后台线程, 不阻塞 JS 主线程) ──
+// -- NAPI: launchClient (异步: wineserver->wineboot->wine 在后台线程, 不阻塞 JS 主线程) --
 struct LaunchParams {
     std::string exePath;
     std::string sockPath;
@@ -190,7 +190,7 @@ static void LaunchThreadFunc(LaunchParams* p) {
         napi_call_threadsafe_function(gStateTsfn, strdup("wineserver-starting"), napi_tsfn_blocking);
     }
 
-    // ── 启动 wineserver ──
+    // -- 启动 wineserver --
     {
         std::vector<std::string> wsEnvStrs = p->envStrs;
         wsEnvStrs.push_back("BOX64_DYNAREC=0");
@@ -230,7 +230,7 @@ static void LaunchThreadFunc(LaunchParams* p) {
         napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-starting"), napi_tsfn_blocking);
     }
 
-    // ── wineboot --init ──
+    // -- wineboot --init --
     {
         OH_LOG_INFO(LOG_APP, "[Launch-Async] running wineboot --init...");
         pid_t bootPid = fork();
@@ -270,7 +270,7 @@ static void LaunchThreadFunc(LaunchParams* p) {
         napi_call_threadsafe_function(gStateTsfn, strdup("wine-starting"), napi_tsfn_blocking);
     }
 
-    // ── 启动 wine ──
+    // -- 启动 wine --
     pid_t pid = fork();
     if (pid == 0) {
         close(p->pipefd[0]);
@@ -348,7 +348,7 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
     fcntl(p->pipefd[0], F_SETFD, FD_CLOEXEC);
     signal(SIGCHLD, SIG_IGN);
 
-    // 启动后台线程: wineserver → wineboot --init → wine
+    // 启动后台线程: wineserver -> wineboot --init -> wine
     std::thread(LaunchThreadFunc, p).detach();
 
     OH_LOG_INFO(LOG_APP, "[Launch] background thread started, returning to JS");
@@ -358,7 +358,7 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
     return r;
 }
 
-// ── NAPI: mmap 全量权限测试 (覆盖 Box64 + Wine 所有模式) ──
+// -- NAPI: mmap 全量权限测试 (覆盖 Box64 + Wine 所有模式) --
 #include <sys/mman.h>
 #include <spawn.h>
 #include <sys/syscall.h>
@@ -394,7 +394,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
     const size_t pg = 4096;
     L("===== OHOS mmap 全量测试 (Box64/Wine 模式覆盖) =====");
 
-    // ─── 1a. 匿名 MAP_PRIVATE ───
+    // --- 1a. 匿名 MAP_PRIVATE ---
     L("--- 1a. ANON|PRIV 4KB ---");
     for (int p = 0; p < 8; p++) {
         char desc[32];
@@ -402,7 +402,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         TestOne(desc, mmap(NULL, pg, p, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0), pg);
     }
 
-    // ─── 1b. 匿名 MAP_SHARED ───
+    // --- 1b. 匿名 MAP_SHARED ---
     L("--- 1b. ANON|SHARED 4KB ---");
     for (int p = 0; p < 8; p++) {
         char desc[32];
@@ -410,7 +410,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         TestOne(desc, mmap(NULL, pg, p, MAP_SHARED | MAP_ANONYMOUS, -1, 0), pg);
     }
 
-    // ─── 1c. 文件 memfd SHARED ───
+    // --- 1c. 文件 memfd SHARED ---
     L("--- 1c. FILE|SHARED 4KB ---");
     for (int p = 0; p < 8; p++) {
         int fd = syscall(__NR_memfd_create, "mmap_t", MFD_CLOEXEC);
@@ -422,7 +422,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         close(fd);
     }
 
-    // ─── 1d. 文件 memfd PRIVATE ───
+    // --- 1d. 文件 memfd PRIVATE ---
     L("--- 1d. FILE|PRIV 4KB ---");
     for (int p = 0; p < 8; p++) {
         int fd = syscall(__NR_memfd_create, "mmap_t", MFD_CLOEXEC);
@@ -434,7 +434,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         close(fd);
     }
 
-    // ─── 2. 大尺寸 (Wine virtual alloc / ELF 加载) ───
+    // --- 2. 大尺寸 (Wine virtual alloc / ELF 加载) ---
     L("--- 2. ANON|PRIV 大尺寸 RWX ---");
     size_t big[] = {0x10000, 0x100000, 0x1000000, 0x10000000};
     for (int i = 0; i < 4; i++) {
@@ -444,7 +444,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
                            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0), big[i]);
     }
 
-    // ─── 3. MAP_FIXED (Box64 ELF loader / Wine prereserve) ───
+    // --- 3. MAP_FIXED (Box64 ELF loader / Wine prereserve) ---
     L("--- 3a. MAP_FIXED ANON|PRIV ---");
     {
         void* base = mmap(NULL, pg * 16, PROT_READ | PROT_WRITE,
@@ -498,7 +498,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         }
     }
 
-    // ─── 4. MAP_NORESERVE (Box64 ELF pre-allocation) ───
+    // --- 4. MAP_NORESERVE (Box64 ELF pre-allocation) ---
     L("--- 4. MAP_NORESERVE ANON|PRIV ---");
     {
         int prots[] = {0, PROT_READ, PROT_READ | PROT_WRITE,
@@ -513,7 +513,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         }
     }
 
-    // ─── 5. 高地址 hint (模拟 Box64 find47bitBlock) ───
+    // --- 5. 高地址 hint (模拟 Box64 find47bitBlock) ---
     L("--- 5. 高地址 hint RWX ---");
     {
         void* hints[] = {nullptr,
@@ -535,7 +535,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         }
     }
 
-    // ─── 6. MAP_32BIT (ARM64 不支持的 x86 flag) ───
+    // --- 6. MAP_32BIT (ARM64 不支持的 x86 flag) ---
     L("--- 6. MAP_32BIT (0x40) ---");
     {
         int prots[] = {0, PROT_READ | PROT_WRITE,
@@ -550,7 +550,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         }
     }
 
-    // ─── 7. mprotect ───
+    // --- 7. mprotect ---
     L("--- 7a. mprotect ANON RW -> ... ---");
     {
         void* m = mmap(NULL, pg * 16, PROT_READ | PROT_WRITE,
@@ -589,7 +589,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         }
     }
 
-    // ─── 8 + 9. 可执行代码测试 ───
+    // --- 8 + 9. 可执行代码测试 ---
     L("--- 8. ANON RWX + exec ---");
     {
         void* m = mmap(NULL, pg, PROT_READ | PROT_WRITE | PROT_EXEC,
@@ -621,7 +621,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         }
     }
 
-    // ─── 10. fork mmap (用 pipe 捕获子进程输出) ───
+    // --- 10. fork mmap (用 pipe 捕获子进程输出) ---
     L("--- 10. fork mmap ---");
     {
         int fd[2]; pipe(fd);
@@ -648,7 +648,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         waitpid(pid, NULL, 0);
     }
 
-    // ─── 10b. 嵌套 fork (孙进程) — 模拟 wineserver 场景: APP→fork→box64→fork→wineserver ───
+    // --- 10b. 嵌套 fork (孙进程) -- 模拟 wineserver 场景: APP->fork->box64->fork->wineserver ---
     L("--- 10b. nested fork (grandchild) ---");
     {
         int fd[2]; pipe(fd);
@@ -658,7 +658,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
             int fd2[2]; pipe(fd2);
             pid_t pid2 = fork();
             if (pid2 == 0) {
-                // grandchild — 这才是 wineserver 等效层级
+                // grandchild -- 这才是 wineserver 等效层级
                 close(fd2[0]); dup2(fd2[1], STDOUT_FILENO); dup2(fd2[1], STDERR_FILENO);
                 setvbuf(stdout, NULL, _IONBF, 0); setvbuf(stderr, NULL, _IONBF, 0);
                 printf("gc: starting mmap tests\n");
@@ -698,7 +698,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
         waitpid(pid, NULL, 0);
     }
 
-    // ─── 11. posix_spawn mmap_test (pipe 捕获) ───
+    // --- 11. posix_spawn mmap_test (pipe 捕获) ---
     L("--- 11. posix_spawn mmap_test ---");
     {
         int fd[2]; pipe(fd);
@@ -734,7 +734,7 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
     return nullptr;
 }
 
-// ── NAPI: stopClient ──
+// -- NAPI: stopClient --
 static napi_value StopClient(napi_env, napi_callback_info) {
     gReaderRunning = false;
     if (gClientPid > 0) {
@@ -745,7 +745,7 @@ static napi_value StopClient(napi_env, napi_callback_info) {
     return nullptr;
 }
 
-// ── NAPI: stopAll ──
+// -- NAPI: stopAll --
 static napi_value StopAll(napi_env, napi_callback_info) {
     gReaderRunning = false;
     if (gClientPid > 0) {
@@ -756,7 +756,7 @@ static napi_value StopAll(napi_env, napi_callback_info) {
     return nullptr;
 }
 
-// ── 终端实现 — fork + pipe (不用 pty, OHOS 沙箱不允许 /dev/ptmx) ──
+// -- 终端实现 -- fork + pipe (不用 pty, OHOS 沙箱不允许 /dev/ptmx) --
 static int gTermOutFd = -1;  // 读子进程 stdout
 static int gTermInFd = -1;   // 写子进程 stdin
 static pid_t gTermPid = -1;
@@ -907,7 +907,7 @@ static napi_value TermClose(napi_env, napi_callback_info) {
     return nullptr;
 }
 
-// ── Toplevel 回调 → ArkTS ──
+// -- Toplevel 回调 -> ArkTS --
 static napi_threadsafe_function gToplevelTsfn = nullptr;
 
 struct ToplevelEvent {
@@ -931,7 +931,7 @@ static void CallJsToplevel(napi_env env, napi_value cb, void*, void* raw) {
     delete ev;
 }
 
-// ── NAPI: setToplevelCallback ──
+// -- NAPI: setToplevelCallback --
 static napi_value SetToplevelCallback(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -961,7 +961,16 @@ static napi_value SetToplevelCallback(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-// ── NAPI: setPendingToplevel ── (ArkTS 创建子窗口前调用, 告诉 C++ 下一个 XComponent 属于哪个 toplevel)
+// -- NAPI: getCurrentToplevelId -- (WineWindow 查询自己的 toplevelId)
+static napi_value GetCurrentToplevelId(napi_env env, napi_callback_info info) {
+    uint32_t id = PluginManager::GetInstance()->GetCurrentToplevelId();
+    OH_LOG_INFO(LOG_APP, "[MW-NAPI] getCurrentToplevelId = %{public}u", id);
+    napi_value r;
+    napi_create_uint32(env, id, &r);
+    return r;
+}
+
+// -- NAPI: setPendingToplevel -- (ArkTS 创建子窗口前调用, 告诉 C++ 下一个 XComponent 属于哪个 toplevel)
 static napi_value SetPendingToplevel(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -973,7 +982,7 @@ static napi_value SetPendingToplevel(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-// ── NAPI: destroyToplevel ── (ArkTS 关闭子窗口后调用)
+// -- NAPI: destroyToplevel -- (ArkTS 关闭子窗口后调用)
 static napi_value DestroyToplevel(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -985,7 +994,7 @@ static napi_value DestroyToplevel(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-// ── NAPI: sendToplevelClose ── (通知 Wine 关闭窗口)
+// -- NAPI: sendToplevelClose -- (通知 Wine 关闭窗口)
 static napi_value SendToplevelClose(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -997,7 +1006,7 @@ static napi_value SendToplevelClose(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-// ── NAPI: initXComponent ── (从 aboutToAppear 调用, 此时 XComponent 已就绪)
+// -- NAPI: initXComponent -- (从 aboutToAppear 调用, 此时 XComponent 已就绪)
 static napi_value InitXComponent(napi_env env, napi_callback_info /*info*/) {
     OH_LOG_INFO(LOG_APP, "[MW-NAPI] initXComponent called, gEnv=%{public}p gExports=%{public}p curEnv=%{public}p",
                 gEnv, gExports, env);
@@ -1009,7 +1018,7 @@ static napi_value InitXComponent(napi_env env, napi_callback_info /*info*/) {
             OH_LOG_INFO(LOG_APP, "[MW-NAPI] initXComponent: get_reference status=%{public}d", s);
             if (s == napi_ok) {
                 PluginManager::GetInstance()->Export(gEnv, exports);
-                OH_LOG_INFO(LOG_APP, "[MW-NAPI] initXComponent: Export done ✓");
+                OH_LOG_INFO(LOG_APP, "[MW-NAPI] initXComponent: Export done OK");
                 return nullptr;
             }
         }
@@ -1021,7 +1030,7 @@ static napi_value InitXComponent(napi_env env, napi_callback_info /*info*/) {
     return nullptr;
 }
 
-// ── NAPI: setDisplayScale ── (传入设备 densityPixels, 供渲染层计算 viewport)
+// -- NAPI: setDisplayScale -- (传入设备 densityPixels, 供渲染层计算 viewport)
 static napi_value SetDisplayScale(napi_env env, napi_callback_info info) {
     size_t argc = 1;
     napi_value args[1];
@@ -1033,10 +1042,10 @@ static napi_value SetDisplayScale(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
-// ── 模块注册 ──
+// -- 模块注册 --
 EXTERN_C_START
 static napi_value Init(napi_env env, napi_value exports) {
-    OH_LOG_INFO(LOG_APP, "[MW-NAPI] ▶ Init called, env=%{public}p", env);
+    OH_LOG_INFO(LOG_APP, "[MW-NAPI]  Init called, env=%{public}p", env);
 
     napi_property_descriptor desc[] = {
         {"startServer",    nullptr, StartServer,    nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -1045,12 +1054,17 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"stopAll",        nullptr, StopAll,        nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setStateCallback", nullptr, SetStateCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setToplevelCallback", nullptr, SetToplevelCallback, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getCurrentToplevelId", nullptr, GetCurrentToplevelId, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setPendingToplevel", nullptr, SetPendingToplevel, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"destroyToplevel", nullptr, DestroyToplevel, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendToplevelClose", nullptr, SendToplevelClose, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"initXComponent", nullptr, InitXComponent, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runMmapTests",  nullptr, RunMmapTests,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setDisplayScale", nullptr, SetDisplayScale, nullptr, nullptr, nullptr, napi_default, nullptr},
+        // ArkTS input forwarding (uitest + real device)
+        {"forwardTouchEvent", nullptr, PluginManager::ForwardTouchEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"forwardMouseEvent", nullptr, PluginManager::ForwardMouseEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"forwardKeyEvent", nullptr, PluginManager::ForwardKeyEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"termRun",       nullptr, TermRun,      nullptr, nullptr, nullptr, napi_default, nullptr},
         {"termSend",      nullptr, TermSend,     nullptr, nullptr, nullptr, napi_default, nullptr},
         {"termResize",    nullptr, TermResize,   nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -1058,7 +1072,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     };
     napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
 
-    // ★ 保存 env 和 exports，供后续 initXComponent 调用使用
+    // 保存 env 和 exports，供后续 initXComponent 调用使用
     // 先释放旧引用
     if (gExports) {
         napi_delete_reference(gEnv, gExports);
@@ -1070,7 +1084,7 @@ static napi_value Init(napi_env env, napi_value exports) {
 
     // libraryname='entry' 保证 XComponent 在 exports 中, Init 时即可注册
     PluginManager::GetInstance()->Export(env, exports);
-    OH_LOG_INFO(LOG_APP, "[MW-NAPI] Init complete ✓");
+    OH_LOG_INFO(LOG_APP, "[MW-NAPI] Init complete OK");
     return exports;
 }
 EXTERN_C_END

@@ -20,6 +20,8 @@ public:
 
     static WaylandServer* GetInstance();
 
+    wl_display* GetDisplay() const { return display_; }
+
     bool Start(const std::string& socketPath);
     void Stop();
 
@@ -28,24 +30,24 @@ public:
     // 取指定 toplevel 的最新帧
     bool TakeToplevelFrame(uint32_t toplevelId, std::vector<uint8_t>& outPixels, int& w, int& h);
 
-    // 状态回调 (首帧到达 → 通知 ArkTS)
+    // 状态回调 (首帧到达 -> 通知 ArkTS)
     void SetStateCallback(StateCb cb) { stateCb_ = std::move(cb); }
     void FireState(const char* s) { if (stateCb_) stateCb_(s); }
     void ResetFirstFrame() { firstFrame_ = false; }
 
-    // toplevel 回调 (xdg_toplevel 生命周期 → 通知 ArkTS 创建/销毁窗口)
+    // toplevel 回调 (xdg_toplevel 生命周期 -> 通知 ArkTS 创建/销毁窗口)
     void SetToplevelCallback(ToplevelCb cb) { toplevelCb_ = std::move(cb); }
     void FireToplevelEvent(uint32_t id, const char* event, const char* jsonData = "{}");
 
     // 生成唯一 toplevel ID
     uint32_t NextToplevelId() { return nextToplevelId_++; }
 
-    // toplevel resource 映射 (用于 SendToplevelClose → xdg_toplevel_send_close)
+    // toplevel resource 映射 (用于 SendToplevelClose -> xdg_toplevel_send_close)
     void RegisterToplevelResource(uint32_t toplevelId, wl_resource* tl);
     void UnregisterToplevelResource(uint32_t toplevelId);
     void SendToplevelClose(uint32_t toplevelId);
 
-    // ── wayland 协议实现 ──
+    // -- wayland 协议实现 --
     static void compositor_bind(wl_client*, void*, uint32_t, uint32_t);
     static void compositor_create_surface(wl_client*, wl_resource*, uint32_t);
     static void compositor_create_region(wl_client*, wl_resource*, uint32_t);
@@ -92,6 +94,9 @@ public:
     /* wl_output */
     static void output_release(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
 
+    // toplevelId -> wl_surface 映射 (供 Seat::InjectPointerEnter 查找)
+    wl_resource* GetSurfaceForToplevel(uint32_t toplevelId);
+
 private:
     WaylandServer() = default;
     void EventLoop();
@@ -106,7 +111,7 @@ private:
     int width_ = 0, height_ = 0;
     std::atomic<bool> dirty_{false};
 
-    // toplevel 帧缓冲: toplevelId → pixels
+    // toplevel 帧缓冲: toplevelId -> pixels
     std::mutex toplevelMutex_;
     std::unordered_map<uint32_t, std::vector<uint8_t>> toplevelPixels_;
     std::unordered_map<uint32_t, int> toplevelW_, toplevelH_;
@@ -119,6 +124,10 @@ private:
     std::atomic<uint32_t> nextToplevelId_{1};
     std::unordered_map<uint32_t, wl_resource*> toplevelResources_;
     std::mutex toplevelResMutex_;
+
+    // toplevelId -> wl_surface 映射 (input focus 查找)
+    std::unordered_map<uint32_t, wl_resource*> toplevelSurfaceMap_;
+    std::mutex toplevelSurfaceMutex_;
 };
 
 // wl_surface 的每个实例携带的数据

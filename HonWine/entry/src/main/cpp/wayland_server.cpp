@@ -1,4 +1,5 @@
 #include "wayland_server.h"
+#include "seat.h"
 #include "fps_counter.h"
 #include "include/viewporter-server-protocol.h"
 #include "include/xdg-shell-server-protocol.h"
@@ -15,7 +16,7 @@ extern "C" void RegisterXdgShell(wl_display* display);
 #define LOG_TAG "WL_Server"
 #include <hilog/log.h>
 
-// ── wl_surface 接口实现表 ──
+// -- wl_surface 接口实现表 --
 static const struct wl_surface_interface kSurfaceImpl = {
     .destroy           = WaylandServer::surface_destroy,
     .attach            = WaylandServer::surface_attach,
@@ -70,7 +71,7 @@ static const struct wl_compositor_interface kCompositorImpl = {
     .create_region  = WaylandServer::compositor_create_region,
 };
 
-// ── 单例 ──
+// -- 单例 --
 WaylandServer* WaylandServer::GetInstance() {
     static WaylandServer s;
     return &s;
@@ -120,18 +121,20 @@ bool WaylandServer::Start(const std::string& socketPath) {
     wl_global_create(display_, &wl_subcompositor_interface, 1, this, subcompositor_bind);
     wl_global_create(display_, &wp_viewporter_interface, 1, this, viewporter_bind);
     wl_global_create(display_, &wl_output_interface, 3, this, output_bind);
-    OH_LOG_INFO(LOG_APP, "[WL] globals registered (compositor+shm+xdg+subcompositor+viewporter+output)");
+    Seat::GetInstance()->Register(display_);
+    OH_LOG_INFO(LOG_APP, "[WL] globals registered (compositor+shm+xdg+subcompositor+viewporter+output+seat)");
 
     running_ = true;
     firstFrame_ = false;
     thread_ = std::thread(&WaylandServer::EventLoop, this);
-    OH_LOG_INFO(LOG_APP, "[WL] compositor started ✓");
+    OH_LOG_INFO(LOG_APP, "[WL] compositor started OK");
     return true;
 }
 
 void WaylandServer::Stop() {
     if (!running_) return;
     running_ = false;
+    Seat::GetInstance()->Unregister();
     if (display_) wl_display_terminate(display_);
     if (thread_.joinable()) thread_.join();
     if (display_) {
@@ -143,13 +146,13 @@ void WaylandServer::Stop() {
 
 void WaylandServer::EventLoop() {
     while (running_) {
-        wl_display_flush_clients(display_);
         wl_event_loop* loop = wl_display_get_event_loop(display_);
         wl_event_loop_dispatch(loop, 50); // 50ms timeout
+        wl_display_flush_clients(display_);  // dispatch 可能写数据, 之后 flush
     }
 }
 
-// ── compositor 实现 ──
+// -- compositor 实现 --
 void WaylandServer::compositor_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
     wl_resource* res = wl_resource_create(client, &wl_compositor_interface, version, id);
     wl_resource_set_implementation(res, &kCompositorImpl, data, nullptr);
@@ -172,7 +175,7 @@ void WaylandServer::compositor_create_region(wl_client* client, wl_resource* com
     wl_resource_set_implementation(res, &kRegionImpl, nullptr, nullptr);
 }
 
-// ── subcompositor 实现 ──
+// -- subcompositor 实现 --
 void WaylandServer::subcompositor_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
     OH_LOG_INFO(LOG_APP, "[WL] wl_subcompositor bound v=%{public}u", version);
     wl_resource* res = wl_resource_create(client, &wl_subcompositor_interface, version, id);
@@ -186,7 +189,7 @@ void WaylandServer::subcompositor_get_subsurface(wl_client* client, wl_resource*
     wl_resource_set_implementation(ss, &kSubsurfaceImpl, nullptr, nullptr);
 }
 
-// ── viewporter 实现 ──
+// -- viewporter 实现 --
 void WaylandServer::viewporter_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
     OH_LOG_INFO(LOG_APP, "[WL] wp_viewporter bound v=%{public}u", version);
     wl_resource* res = wl_resource_create(client, &wp_viewporter_interface, version, id);
@@ -199,7 +202,7 @@ void WaylandServer::viewporter_get_viewport(wl_client* client, wl_resource*,
     wl_resource_set_implementation(vp, &kViewportImpl, nullptr, nullptr);
 }
 
-// ── output 实现 ──
+// -- output 实现 --
 void WaylandServer::output_bind(wl_client* client, void* data, uint32_t version, uint32_t id) {
     OH_LOG_INFO(LOG_APP, "[WL] wl_output bound v=%{public}u", version);
     wl_resource* res = wl_resource_create(client, &wl_output_interface, version, id);
@@ -218,11 +221,17 @@ void WaylandServer::output_bind(wl_client* client, void* data, uint32_t version,
     wl_output_send_done(res);
 }
 
-// ── surface 实现 ──
+// -- surface 实现 --
 void WaylandServer::surface_destroy(wl_client*, wl_resource* r) {
     auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(r));
     if (sd && sd->hasToplevel) {
-        GetInstance()->FireToplevelEvent(sd->toplevelId, "destroyed");
+        // 清理 surface 映射
+        auto* self = GetInstance();
+        {
+            std::lock_guard<std::mutex> lk(self->toplevelSurfaceMutex_);
+            self->toplevelSurfaceMap_.erase(sd->toplevelId);
+        }
+        self->FireToplevelEvent(sd->toplevelId, "destroyed");
     }
     wl_resource_destroy(r);
 }
@@ -312,6 +321,11 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
         }
         // toplevel framebuffer
         if (sd->hasToplevel) {
+            // Register surface mapping for input focus lookup
+            {
+                std::lock_guard<std::mutex> lk(self->toplevelSurfaceMutex_);
+                self->toplevelSurfaceMap_[sd->toplevelId] = surfRes;
+            }
             std::lock_guard<std::mutex> lk(self->toplevelMutex_);
             copyTight(self->toplevelPixels_[sd->toplevelId]);
             self->toplevelW_[sd->toplevelId] = contentW;
@@ -320,7 +334,7 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
             OH_LOG_INFO(LOG_APP, "[MW-COMMIT] toplevel #%{public}u frame %{public}dx%{public}d stride=%{public}d stored=%{public}zu",
                         sd->toplevelId, contentW, contentH, stride, self->toplevelPixels_[sd->toplevelId].size());
 
-            // 检测尺寸变化 → 通知 ArkTS 调整子窗口
+            // 检测尺寸变化 -> 通知 ArkTS 调整子窗口
             int lastW = self->toplevelLastReportedW_[sd->toplevelId];
             int lastH = self->toplevelLastReportedH_[sd->toplevelId];
             if (contentW != lastW || contentH != lastH) {
@@ -328,7 +342,7 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
                 self->toplevelLastReportedH_[sd->toplevelId] = contentH;
                 char json[64];
                 snprintf(json, sizeof(json), "{\"w\":%d,\"h\":%d}", contentW, contentH);
-                OH_LOG_INFO(LOG_APP, "[MW] toplevel #%{public}u size changed: %{public}dx%{public}d → ArkTS",
+                OH_LOG_INFO(LOG_APP, "[MW] toplevel #%{public}u size changed: %{public}dx%{public}d -> ArkTS",
                             sd->toplevelId, contentW, contentH);
                 self->FireToplevelEvent(sd->toplevelId, "resize", json);
             }
@@ -354,7 +368,7 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
     }
 }
 
-// ── 帧数据接口 ──
+// -- 帧数据接口 --
 bool WaylandServer::TakeFrame(std::vector<uint8_t>& out, int& w, int& h) {
     std::lock_guard<std::mutex> lk(mutex_);
     if (!dirty_) return false;
@@ -410,9 +424,17 @@ void WaylandServer::SendToplevelClose(uint32_t toplevelId) {
         }
     }
     if (tl) {
-        OH_LOG_INFO(LOG_APP, "[MW] SendToplevelClose id=%{public}u → xdg_toplevel_send_close", toplevelId);
+        OH_LOG_INFO(LOG_APP, "[MW] SendToplevelClose id=%{public}u -> xdg_toplevel_send_close", toplevelId);
         xdg_toplevel_send_close(tl);
     } else {
         OH_LOG_WARN(LOG_APP, "[MW] SendToplevelClose id=%{public}u NOT found", toplevelId);
     }
+}
+
+// -- toplevelId -> wl_surface 映射 (供 Seat::InjectPointerEnter 查找) --
+wl_resource* WaylandServer::GetSurfaceForToplevel(uint32_t toplevelId) {
+    std::lock_guard<std::mutex> lk(toplevelSurfaceMutex_);
+    auto it = toplevelSurfaceMap_.find(toplevelId);
+    if (it != toplevelSurfaceMap_.end()) return it->second;
+    return nullptr;
 }

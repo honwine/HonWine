@@ -8,7 +8,7 @@ source "$SCRIPT_DIR/env.sh"
 package_hnp() {
     log "=== 打包 HNP ==="
     mkdir -p "$OUT_DIR"
-    "$HNPCLI" pack -i "$STAGING_DIR" -o "$OUT_DIR" -n honwine -v 0.1.0
+    "$HNPCLI" pack -i "$STAGING_DIR" -o "$OUT_DIR" -n honwine -v 0.1.0 || { err "hnpcli pack 失败"; return 1; }
     ls -lh "$OUT_DIR/honwine.hnp"
 }
 
@@ -21,7 +21,7 @@ package_hap() {
     cp "$OUT_DIR/honwine.hnp" "$HONWINE/entry/hnp/arm64-v8a/honwine.hnp"
 
     cd "$HONWINE"
-    hvigorw assembleHap
+    hvigorw assembleHap || { err "hvigorw assembleHap 失败"; return 1; }
 
     cd "$HONWINE/entry"
     zip -r "$unsigned_hap" hnp
@@ -37,17 +37,17 @@ deploy() {
     local device="${1:-192.168.1.4:38879}"
     local hap="$HONWINE/entry/build/default/outputs/default/entry-default-signed.hap"
 
-    log "=== 部署到 $device ==="
-    hdc tconn "$device"
-    hdc shell bm uninstall -n app.hackeris.honwine 2>/dev/null || true
-    hdc file send "$hap" /data/local/tmp/
-    hdc shell bm install -p /data/local/tmp/entry-default-signed.hap -r
+    if [ ! -f "$hap" ]; then
+        err "HAP 文件不存在: $hap"
+    fi
 
-    log "部署完成。测试命令:"
-    echo ""
-    echo "  cd /data/service/hnp/honwine.org/honwine_0.1.0/opt/honwine"
-    echo "  rm -rf /data/local/tmp/.wine"
-    echo '  WINEPREFIX=/data/local/tmp/.wine ./bin/box64 ./bin/wine ./bin/cmd.exe /c echo hello 2>&1'
+    log "=== 部署到 $device ==="
+    hdc tconn "$device" || { err "hdc tconn 失败"; }
+    hdc shell bm uninstall -n app.hackeris.honwine 2>/dev/null || true
+    hdc file send "$hap" /data/local/tmp/ || { err "hdc file send 失败"; }
+    hdc shell bm install -p /data/local/tmp/entry-default-signed.hap -r || { err "bm install 失败"; }
+
+    log "部署完成"
 }
 
 # ---- main ----

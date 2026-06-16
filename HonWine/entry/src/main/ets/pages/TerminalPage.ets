@@ -48,7 +48,7 @@ struct TerminalPage {
   build() {
     Column() {
       Row() {
-        Button('← 返回').onClick(() => router.back())
+        Button('<- 返回').onClick(() => router.back())
         Text('Terminal').fontColor(Color.White).margin({ left: 10 })
       }
       .width('100%').height(36).backgroundColor('#333').padding({ left: 8 })

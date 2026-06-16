@@ -24,6 +24,7 @@ add_library(entry SHARED
     wayland_server.cpp
     egl_renderer.cpp
     plugin_manager.cpp
+    seat.cpp
     xdg_shell.cpp
     xdg-shell-protocol.c
     viewporter-server-protocol.c

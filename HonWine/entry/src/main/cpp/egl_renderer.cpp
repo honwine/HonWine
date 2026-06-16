@@ -9,7 +9,7 @@
 #define LOG_TAG "WL_EGL"
 #include <hilog/log.h>
 
-// ── 共享 EGLDisplay: 整个进程只初始化一次, 避免反复 init/terminate 导致 GPU 驱动竞争 ──
+// -- 共享 EGLDisplay: 整个进程只初始化一次, 避免反复 init/terminate 导致 GPU 驱动竞争 --
 static EGLDisplay gSharedDisplay = EGL_NO_DISPLAY;
 static std::once_flag gDisplayOnce;
 
@@ -28,12 +28,12 @@ EGLDisplay EglRenderer::GetSharedDisplay() {
             gSharedDisplay = EGL_NO_DISPLAY;
             return;
         }
-        OH_LOG_INFO(LOG_APP, "[EGL] shared display init ✓ EGL %{public}d.%{public}d", major, minor);
+        OH_LOG_INFO(LOG_APP, "[EGL] shared display init OK EGL %{public}d.%{public}d", major, minor);
     });
     return gSharedDisplay;
 }
 
-// ── 全屏 quad 着色器 (Wayland ARGB = BGRA 内存序, 像素着色器中 swizzle) ──
+// -- 全屏 quad 着色器 (Wayland ARGB = BGRA 内存序, 像素着色器中 swizzle) --
 static const char* kVS = R"(#version 300 es
 layout(location=0) in vec2 aPos;
 layout(location=1) in vec2 aUV;
@@ -106,7 +106,7 @@ bool EglRenderer::Init(OHNativeWindow* window, int w, int h) {
 
     running_ = true;
     thread_ = std::thread(&EglRenderer::RenderLoop, this);
-    OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u Init done, render thread started ✓", toplevelId_);
+    OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u Init done, render thread started OK", toplevelId_);
     return true;
 }
 
@@ -159,8 +159,11 @@ void EglRenderer::RenderLoop() {
         }
 
         if (haveFrame && fw > 0 && fh > 0) {
+            // 存储帧尺寸供输入坐标转换
+            frameW_ = fw;
+            frameH_ = fh;
             if (!firstFrameLogged) {
-                OH_LOG_INFO(LOG_APP, "[MW-RNDR] tl=%{public}u ▶ FIRST FRAME %{public}dx%{public}d px=%{public}zu",
+                OH_LOG_INFO(LOG_APP, "[MW-RNDR] tl=%{public}u  FIRST FRAME %{public}dx%{public}d px=%{public}zu",
                             toplevelId_, fw, fh, px.size());
                 firstFrameLogged = true;
             }
@@ -178,7 +181,7 @@ void EglRenderer::RenderLoop() {
             }
         }
 
-        // 获取 EGL surface 实际大小并铺满渲染
+        // 获取 EGL surface 实际大小
         EGLint surfW = 0, surfH = 0;
         eglQuerySurface(display_, surface_, EGL_WIDTH, &surfW);
         eglQuerySurface(display_, surface_, EGL_HEIGHT, &surfH);
@@ -186,13 +189,42 @@ void EglRenderer::RenderLoop() {
             width_ = surfW;
             height_ = surfH;
         }
-        glViewport(0, 0, width_, height_);
 
-        // 诊断: 全表面渲染, 不做 letterbox
+        // Letterbox 视口: 保持 Wine 帧宽高比, 居中渲染, 左右或上下黑边
+        if (fw > 0 && fh > 0 && width_ > 0 && height_ > 0) {
+            float frameAspect = (float)fw / fh;
+            float surfAspect = (float)width_ / height_;
+            if (surfAspect > frameAspect) {
+                // Surface 比帧更宽 -> 左右黑边
+                vpH_ = height_;
+                vpW_ = (int)(height_ * frameAspect);
+                vpX_ = (width_ - vpW_) / 2;
+                vpY_ = 0;
+            } else {
+                // Surface 比帧更高 -> 上下黑边 (常见: 手机竖屏)
+                vpW_ = width_;
+                vpH_ = (int)(width_ / frameAspect);
+                vpX_ = 0;
+                vpY_ = (height_ - vpH_) / 2;
+            }
+            glViewport(vpX_, vpY_, vpW_, vpH_);
+        } else {
+            glViewport(0, 0, width_, height_);
+        }
+
+        // 诊断: 显示 surface -> frame -> viewport 的完整映射关系
         if (loopCount < 10) {
-            OH_LOG_INFO(LOG_APP, "[MW-RNDR] diag#%{public}d tl=%{public}u have=%{public}d surface=%{public}dx%{public}d frame=%{public}dx%{public}d px=%{public}zu",
-                        loopCount, toplevelId_, haveFrame ? 1 : 0,
-                        width_, height_, fw, fh, px.size());
+            int barTop = vpY_;
+            int barBot = height_ - vpY_ - vpH_;
+            int barLeft = vpX_;
+            int barRight = width_ - vpX_ - vpW_;
+            float sA = (float)width_ / height_;
+            float fA = fw > 0 && fh > 0 ? (float)fw / fh : 0;
+            OH_LOG_INFO(LOG_APP, "[MW-RNDR] diag#%{public}d tl=%{public}u surface=%{public}dx%{public}d(asp=%{public}.2f) frame=%{public}dx%{public}d(asp=%{public}.2f) vp=%{public}dx%{public}d+%{public}d,%{public}d bar=(L%{public}d R%{public}d T%{public}d B%{public}d)",
+                        loopCount, toplevelId_,
+                        width_, height_, sA, fw, fh, fA,
+                        vpW_, vpH_, vpX_, vpY_,
+                        barLeft, barRight, barTop, barBot);
         }
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -229,8 +261,8 @@ void EglRenderer::Shutdown() {
             eglDestroyContext(display_, context_);
             context_ = EGL_NO_CONTEXT;
         }
-        // ★ 不调 eglTerminate: 共享 display 由进程生命周期管理
+        // 不调 eglTerminate: 共享 display 由进程生命周期管理
         // 避免反复 init/terminate 导致 GPU 驱动竞争, 偶发性 SIGSEGV
-        OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u Shutdown ✓ (display retained)", toplevelId_);
+        OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u Shutdown OK (display retained)", toplevelId_);
     }
 }

@@ -17,6 +17,8 @@ struct Index {
       hilog.info(DOMAIN, 'wine', 'state: %{public}s', s);
       this.state = s;
     });
+    // 自动启动 notepad 方便测试
+    this.startWine();
   }
 
   startWine = (): void => {
@@ -50,7 +52,7 @@ struct Index {
           .fontSize(14)
           .onClick(this.startWine)
 
-        Text(this.state == 'active' ? '● 运行中' : '○ 待机')
+        Text(this.state == 'active' ? ' 运行中' : ' 待机')
           .fontSize(13)
           .fontColor(this.state == 'active' ? '#4f4' : '#888')
           .margin({ left: 12 })

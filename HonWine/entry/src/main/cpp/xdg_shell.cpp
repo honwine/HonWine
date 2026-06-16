@@ -18,10 +18,10 @@ struct XdgSurface {
     wl_resource* xdgToplevel = nullptr;
 };
 
-// ── xdg_toplevel 实现 (最小: 记录 title, 其余空) ──
+// -- xdg_toplevel 实现 (最小: 记录 title, 其余空) --
 static void tl_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
 static void tl_resource_destroy(wl_resource* r) {
-    // ★ 当 Wine 客户端销毁 toplevel 时, 清理 WaylandServer 中的注册
+    // 当 Wine 客户端销毁 toplevel 时, 清理 WaylandServer 中的注册
     // 避免 SendToplevelClose 访问已释放的野指针
     auto* d = static_cast<XdgSurface*>(wl_resource_get_user_data(r));
     if (d && d->wlSurface) {
@@ -74,7 +74,7 @@ static const struct xdg_toplevel_interface kToplevelImpl = {
     .set_minimized    = tl_set_minimized,
 };
 
-// ── xdg_surface 实现 ──
+// -- xdg_surface 实现 --
 static void xs_destroy(wl_client*, wl_resource* r) {
     auto* d = static_cast<XdgSurface*>(wl_resource_get_user_data(r));
     if (d && d->wlSurface) {
@@ -148,7 +148,7 @@ static void xs_resource_destroy(wl_resource* r) {
     delete static_cast<XdgSurface*>(wl_resource_get_user_data(r));
 }
 
-// ── xdg_wm_base 实现 ──
+// -- xdg_wm_base 实现 --
 static void wm_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
 
 static void wm_create_positioner(wl_client* c, wl_resource*, uint32_t id) {

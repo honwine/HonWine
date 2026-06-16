@@ -7,7 +7,7 @@
 #include <atomic>
 #include <cstdint>
 
-// 最小 EGL 渲染器: 从 WaylandServer 取帧 → GL 纹理 → XComponent 上屏
+// 最小 EGL 渲染器: 从 WaylandServer 取帧 -> GL 纹理 -> XComponent 上屏
 // 所有实例共享同一个 EGLDisplay (避免反复 init/terminate 导致 GPU 驱动竞争)
 // 每个实例拥有独立的 EGLContext + EGLSurface
 class EglRenderer {
@@ -22,6 +22,17 @@ public:
     void SetToplevelId(uint32_t id) { toplevelId_ = id; }
     void SetSize(int w, int h) { width_ = w; height_ = h; }
     bool IsValid() const { return running_; }
+
+    // 尺寸 getters (供输入坐标转换: 触控坐标 -> wine 内容坐标)
+    int GetWidth() const { return width_; }
+    int GetHeight() const { return height_; }
+    int GetFrameWidth() const { return frameW_; }
+    int GetFrameHeight() const { return frameH_; }
+    // Letterbox viewport (保持 Wine 帧宽高比居中渲染的视口)
+    int GetVpX() const { return vpX_; }
+    int GetVpY() const { return vpY_; }
+    int GetVpW() const { return vpW_; }
+    int GetVpH() const { return vpH_; }
 
     static void SetGlobalDisplayScale(float s) { globalDisplayScale_ = s; }
     static float GetGlobalDisplayScale() { return globalDisplayScale_; }
@@ -39,6 +50,8 @@ private:
     GLuint vbo_ = 0;
 
     int width_ = 0, height_ = 0;
+    int frameW_ = 0, frameH_ = 0;  // Wine 帧内容尺寸 (坐标转换)
+    int vpX_ = 0, vpY_ = 0, vpW_ = 0, vpH_ = 0;  // Letterbox 视口 (保持宽高比)
     int bufW_ = 0, bufH_ = 0;  // 上次 SET_BUFFER_GEOMETRY 的值, 避免重复调用
     std::thread thread_;
     std::atomic<bool> running_{false};
