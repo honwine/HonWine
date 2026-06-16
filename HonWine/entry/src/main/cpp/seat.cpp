@@ -206,6 +206,10 @@ void Seat::Enqueue(Seat::InputEvent::Type type, uint32_t tl, wl_resource* surfac
         OH_LOG_INFO(LOG_APP, "[CLICK-PIPE]  [Enqueue] type=%{public}d tl=%{public}u surf=%{public}p btn=0x%{public}x state=%{public}u",
                     (int)type, tl, surface, button_or_key, state);
     }
+    if (type == InputEvent::KBD_ENTER || type == InputEvent::KBD_KEY) {
+        OH_LOG_INFO(LOG_APP, "[KBD-PIPE]  [Enqueue] type=%{public}d tl=%{public}u surf=%{public}p key=0x%{public}x state=%{public}u",
+                    (int)type, tl, surface, button_or_key, state);
+    }
     // 唤醒 Wayland 线程 (写 1 字节到 pipe)
     if (pipeWrite_ >= 0) {
         char c = 1;
@@ -237,9 +241,15 @@ void Seat::EnqueuePointerAxis(uint32_t axis, wl_fixed_t value) {
     Enqueue(InputEvent::PTR_AXIS, 0, nullptr, wl_fixed_from_int(0), value, axis, 0);
 }
 void Seat::EnqueueKeyboardEnter(uint32_t tl, wl_resource* surface) {
+    // 立即设置原子标志位, 避免 NAPI 线程在 enqueue 后检查 HasKeyboardEnter() 时
+    // 因 Wayland 线程尚未 flush 而错误丢弃后续按键
+    keyboardFocusedToplevel_ = tl;
+    keyboardEntered_ = true;
     Enqueue(InputEvent::KBD_ENTER, tl, surface, 0, 0, 0, 0);
 }
 void Seat::EnqueueKeyboardLeave() {
+    keyboardEntered_ = false;
+    keyboardFocusedToplevel_ = 0;
     Enqueue(InputEvent::KBD_LEAVE, 0, nullptr, 0, 0, 0, 0);
 }
 void Seat::EnqueueKeyboardKey(uint32_t key, uint32_t state) {
@@ -313,12 +323,15 @@ void Seat::FlushQueue() {
                 InjectPointerAxis(ev.button_or_key, ev.y);
                 break;
             case InputEvent::KBD_ENTER:
+                OH_LOG_INFO(LOG_APP, "[KBD-PIPE]  [Flush] KBD_ENTER tl=%{public}u surf=%{public}p", ev.toplevelId, ev.surface);
                 InjectKeyboardEnter(ev.toplevelId, ev.surface);
                 break;
             case InputEvent::KBD_LEAVE:
+                OH_LOG_INFO(LOG_APP, "[KBD-PIPE]  [Flush] KBD_LEAVE");
                 InjectKeyboardLeave();
                 break;
             case InputEvent::KBD_KEY:
+                OH_LOG_INFO(LOG_APP, "[KBD-PIPE]  [Flush] KBD_KEY key=0x%{public}x state=%{public}u", ev.button_or_key, ev.state);
                 InjectKeyboardKey(ev.button_or_key, ev.state);
                 break;
         }
@@ -390,7 +403,11 @@ void Seat::InjectPointerAxis(uint32_t axis, wl_fixed_t value) {
 }
 
 void Seat::InjectKeyboardEnter(uint32_t toplevelId, wl_resource* surface) {
-    if (!keyboardResource_.load() || !surface) return;
+    if (!keyboardResource_.load()) {
+        OH_LOG_WARN(LOG_APP, "[KBD-PIPE] [InjectEnter] DROPPED tl=%{public}u: no wl_keyboard resource", toplevelId);
+        return;
+    }
+    if (!surface) return;
     keyboardFocusedToplevel_ = toplevelId;
     keyboardFocusedSurface_ = surface;
     keyboardEntered_ = true;
@@ -402,13 +419,18 @@ void Seat::InjectKeyboardEnter(uint32_t toplevelId, wl_resource* surface) {
     wl_array_release(&keys);
 
     wl_keyboard_send_modifiers(keyboardResource_, s, 0, 0, 0, 0);
-    OH_LOG_INFO(LOG_APP, "[Seat] kbd_enter tl=%{public}u serial=%{public}u OK", toplevelId, s);
+    OH_LOG_INFO(LOG_APP, "[KBD-PIPE]  [InjectEnter] tl=%{public}u serial=%{public}u -> wl_keyboard_send_enter", toplevelId, s);
 }
 
 void Seat::InjectKeyboardKey(uint32_t key, uint32_t state) {
-    if (!keyboardResource_.load()) return;
+    if (!keyboardResource_.load()) {
+        static int kbdDropCount = 0;
+        if (++kbdDropCount <= 5)
+            OH_LOG_WARN(LOG_APP, "[KBD-PIPE] [InjectKey] DROPPED key=0x%{public}x state=%{public}u: no wl_keyboard resource (%{public}d/5)", key, state, kbdDropCount);
+        return;
+    }
     uint32_t s = serial_++;
-    OH_LOG_INFO(LOG_APP, "[Seat] key key=%{public}u state=%{public}u serial=%{public}u", key, state, s);
+    OH_LOG_INFO(LOG_APP, "[KBD-PIPE]  [InjectKey] evdev=%{public}u state=%{public}u serial=%{public}u -> wl_keyboard_send_key", key, state, s);
     wl_keyboard_send_key(keyboardResource_.load(), s, NowMs(), key, state);
 }
 

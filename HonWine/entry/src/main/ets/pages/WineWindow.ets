@@ -58,7 +58,7 @@ struct WineWindow {
     .onKeyEvent((event: KeyEvent) => {
       if (this.toplevelId <= 0) return;
       event.stopPropagation();
-      hilog.info(DOMAIN, 'WineWindow', '[CLICK-PIPE]  [ArkTS-Key] tl=%{public}d keyCode=%{public}d type=%{public}d', this.toplevelId, event.keyCode, event.type);
+      hilog.info(DOMAIN, 'WineWindow', '[KBD-PIPE]  [ArkTS] tl=%{public}d keyCode=%{public}d type=%{public}d (0=Down 1=Up)', this.toplevelId, event.keyCode, event.type);
       testNapi.forwardKeyEvent(this.toplevelId, event.keyCode, event.type);
     })
     .onAreaChange((_o: Area, n: Area) => {

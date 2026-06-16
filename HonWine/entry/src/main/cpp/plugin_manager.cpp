@@ -49,7 +49,9 @@ void PluginManager::Export(napi_env env, napi_value exports) {
     callback_.DispatchTouchEvent = nullptr;  // 输入全部走 Stack ArkTS -> NAPI, 不注册 native 输入回调
     OH_NativeXComponent_RegisterCallback(nxc, &callback_);
 
-    // 触控/鼠标/键盘统一走父 Stack 的 ArkTS 回调 -> ForwardTouchEvent/ForwardMouseEvent/ForwardKeyEvent NAPI
+    // 触控/鼠标走父 Stack 的 ArkTS 回调 -> ForwardMouseEvent NAPI
+    // 键盘必须走 native callback: XComponent (native surface) 会抢占焦点, Stack.onKeyEvent 不触发
+    OH_NativeXComponent_RegisterKeyEventCallback(nxc, OnKeyEvent);
 
     // 所有 XComponent 都属于子窗口 (主界面已无 XComponent)
     subXComponents_.insert(nxc);
@@ -337,7 +339,7 @@ void PluginManager::OnKeyEvent(OH_NativeXComponent* component, void* window) {
 
     auto xit = self->xcToToplevelId_.find(component);
     if (xit == self->xcToToplevelId_.end()) {
-        OH_LOG_WARN(LOG_APP, "[MW-Key] component %{public}p NOT in xcToToplevelId_", component);
+        OH_LOG_WARN(LOG_APP, "[KBD-PIPE] [NativeCb] component %{public}p NOT in xcToToplevelId_", component);
         return;
     }
     uint32_t tid = xit->second;
@@ -345,19 +347,19 @@ void PluginManager::OnKeyEvent(OH_NativeXComponent* component, void* window) {
     OH_NativeXComponent_KeyEvent* ke = nullptr;
     int gk = OH_NativeXComponent_GetKeyEvent(component, &ke);
     int32_t retGetKey = gk;
-    OH_LOG_INFO(LOG_APP, "[MW-Key]  tl=%{public}u GetKeyEvent=%{public}d ke=%{public}p", tid, gk, ke);
+    OH_LOG_INFO(LOG_APP, "[KBD-PIPE] [NativeCb]  tl=%{public}u GetKeyEvent=%{public}d ke=%{public}p", tid, gk, ke);
     if (gk != 0 || !ke) return;
 
     OH_NativeXComponent_KeyAction action;
     int ga = OH_NativeXComponent_GetKeyEventAction(ke, &action);
-    OH_LOG_INFO(LOG_APP, "[MW-Key] GetKeyEventAction=%{public}d action=%{public}d", ga, (int)action);
+    OH_LOG_INFO(LOG_APP, "[KBD-PIPE] [NativeCb] GetKeyEventAction=%{public}d action=%{public}d", ga, (int)action);
 
     OH_NativeXComponent_KeyCode code;
     int gc = OH_NativeXComponent_GetKeyEventCode(ke, &code);
-    OH_LOG_INFO(LOG_APP, "[MW-Key] GetKeyEventCode=%{public}d code=%{public}d", gc, (int)code);
+    OH_LOG_INFO(LOG_APP, "[KBD-PIPE] [NativeCb] GetKeyEventCode=%{public}d code=%{public}d", gc, (int)code);
 
     uint32_t evdev = Seat::MapKeycode((int32_t)code);
-    OH_LOG_INFO(LOG_APP, "[MW-Key] MapKeycode(%{public}d) -> evdev=%{public}u", (int)code, evdev);
+    OH_LOG_INFO(LOG_APP, "[KBD-PIPE] [NativeCb] MapKeycode(%{public}d) -> evdev=%{public}u", (int)code, evdev);
     if (evdev == 0) return;  // unmapped key
 
     auto* seat = Seat::GetInstance();
@@ -365,20 +367,20 @@ void PluginManager::OnKeyEvent(OH_NativeXComponent* component, void* window) {
     // 首次按键或焦点切换: 先 leave 旧 surface 再 enter 新 surface
     if (!seat->HasKeyboardEnter() || seat->GetKeyboardFocusedToplevel() != tid) {
         wl_resource* surf = WaylandServer::GetInstance()->GetSurfaceForToplevel(tid);
-        OH_LOG_INFO(LOG_APP, "[MW-Key] keyboard enter tid=%{public}u surf=%{public}p", tid, surf);
+        OH_LOG_INFO(LOG_APP, "[KBD-PIPE] [NativeCb] keyboard enter tid=%{public}u surf=%{public}p", tid, surf);
         if (surf) {
             if (seat->HasKeyboardEnter() && seat->GetKeyboardFocusedToplevel() != tid)
                 seat->EnqueueKeyboardLeave();
             seat->EnqueueKeyboardEnter(tid, surf);
         } else {
-            OH_LOG_WARN(LOG_APP, "[MW-Key] ERR no surface for tl=%{public}u, skip key", tid);
+            OH_LOG_WARN(LOG_APP, "[KBD-PIPE] [NativeCb] ERR no surface for tl=%{public}u, skip key", tid);
             return;
         }
     }
 
     // 防御: enter 失败则不发 key (避免协议违规)
     if (!seat->HasKeyboardEnter()) {
-        OH_LOG_WARN(LOG_APP, "[MW-Key] ERR keyboard not entered, skip key event");
+        OH_LOG_WARN(LOG_APP, "[KBD-PIPE] [NativeCb] ERR keyboard not entered, skip key event");
         return;
     }
 
@@ -386,7 +388,7 @@ void PluginManager::OnKeyEvent(OH_NativeXComponent* component, void* window) {
     uint32_t wlState = (action == OH_NATIVEXCOMPONENT_KEY_ACTION_DOWN)
                        ? WL_KEYBOARD_KEY_STATE_PRESSED
                        : WL_KEYBOARD_KEY_STATE_RELEASED;
-    OH_LOG_INFO(LOG_APP, "[MW-Key] key evdev=%{public}u state=%{public}u", evdev, wlState);
+    OH_LOG_INFO(LOG_APP, "[KBD-PIPE] [NativeCb] key evdev=%{public}u state=%{public}u", evdev, wlState);
     seat->EnqueueKeyboardKey(evdev, wlState);
 }
 
@@ -585,35 +587,35 @@ napi_value PluginManager::ForwardKeyEvent(napi_env env, napi_callback_info info)
     auto* seat = Seat::GetInstance();
     uint32_t evdev = Seat::MapKeycode(keyCode);
     const char* actName = (keyAction == 0) ? "DOWN" : "UP";
-    OH_LOG_INFO(LOG_APP, "[MW-FwdKey] tl=%{public}u ohosCode=%{public}d -> evdev=%{public}u action=%{public}s kbdEntered=%{public}d kbdFocused=%{public}u",
+    OH_LOG_INFO(LOG_APP, "[KBD-PIPE]  [NAPI-Fwd] tl=%{public}u ohosCode=%{public}d -> evdev=%{public}u action=%{public}s kbdEntered=%{public}d kbdFocused=%{public}u",
                 tid, keyCode, evdev, actName, seat->HasKeyboardEnter(), seat->GetKeyboardFocusedToplevel());
     if (evdev == 0) {
-        OH_LOG_WARN(LOG_APP, "[MW-FwdKey] ERR unmapped ohosCode=%{public}d, dropped", keyCode);
+        OH_LOG_WARN(LOG_APP, "[KBD-PIPE]  [NAPI-Fwd] ERR unmapped ohosCode=%{public}d, dropped", keyCode);
         return nullptr;
     }
 
     if (!seat->HasKeyboardEnter() || seat->GetKeyboardFocusedToplevel() != tid) {
         wl_resource* surf = WaylandServer::GetInstance()->GetSurfaceForToplevel(tid);
-        OH_LOG_INFO(LOG_APP, "[MW-FwdKey] need kbd_enter: tid=%{public}u surf=%{public}p", tid, surf);
+        OH_LOG_INFO(LOG_APP, "[KBD-PIPE]  [NAPI-Enter] need kbd_enter: tid=%{public}u surf=%{public}p", tid, surf);
         if (surf) {
             if (seat->HasKeyboardEnter() && seat->GetKeyboardFocusedToplevel() != tid)
                 seat->EnqueueKeyboardLeave();
             seat->EnqueueKeyboardEnter(tid, surf);
         } else {
-            OH_LOG_WARN(LOG_APP, "[MW-FwdKey] ERR no surface for tl=%{public}u, dropped", tid);
+            OH_LOG_WARN(LOG_APP, "[KBD-PIPE]  [NAPI-Enter] ERR no surface for tl=%{public}u, dropped", tid);
             return nullptr;
         }
     }
 
     if (!seat->HasKeyboardEnter()) {
-        OH_LOG_WARN(LOG_APP, "[MW-FwdKey] ERR kbd enter failed, dropped");
+        OH_LOG_WARN(LOG_APP, "[KBD-PIPE]  [NAPI-Enter] ERR kbd enter failed, dropped");
         return nullptr;
     }
 
     // KeyType.Down=0, KeyType.Up=1; wl: PRESSED=1, RELEASED=0
     uint32_t wlState = (keyAction == 0) ? WL_KEYBOARD_KEY_STATE_PRESSED
                                          : WL_KEYBOARD_KEY_STATE_RELEASED;
-    OH_LOG_INFO(LOG_APP, "[MW-FwdKey] enqueue key evdev=%{public}u wlState=%{public}u OK", evdev, wlState);
+    OH_LOG_INFO(LOG_APP, "[KBD-PIPE]  [NAPI-Enqueue] key evdev=%{public}u wlState=%{public}u OK", evdev, wlState);
     seat->EnqueueKeyboardKey(evdev, wlState);
     return nullptr;
 }
