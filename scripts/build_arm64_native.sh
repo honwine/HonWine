@@ -1,19 +1,19 @@
 #!/bin/bash
 # build_arm64_native.sh — Wayland compositor 所需的 ARM64 二进制依赖
-# 产物: HonWine/entry/libs/arm64-v8a/ (.so) + HonWine/entry/src/main/cpp/include/ (头文件)
+# 产物: WineHua/entry/libs/arm64-v8a/ (.so) + HonWine/entry/src/main/cpp/include/ (头文件)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
 
 ARM64_TARGET="aarch64-linux-ohos"
-HONWINE_LIBS="$HONWINE/entry/libs/arm64-v8a"
-HONWINE_INC="$HONWINE/entry/src/main/cpp/include"
+WINEHUA_LIBS="$WINEHUA/entry/libs/arm64-v8a"
+WINEHUA_INC="$WINEHUA/entry/src/main/cpp/include"
 ARM64_BUILD="$BUILD_DIR/arm64_native"
 ARM64_SYSROOT="$OHOS_SDK/native/sysroot"
 
 log "=== 构建 ARM64 Wayland 依赖 (Compositor) ==="
 
-mkdir -p "$HONWINE_LIBS" "$HONWINE_INC" "$ARM64_BUILD"
+mkdir -p "$WINEHUA_LIBS" "$WINEHUA_INC" "$ARM64_BUILD"
 
 # ── ARM64 meson cross file ──
 gen_arm64_cross() {
@@ -42,7 +42,7 @@ XEOF
 
 # ── 1. libffi (ARM64) ──
 build_libffi_arm64() {
-    if [ -f "$HONWINE_LIBS/libffi.so.8" ]; then
+    if [ -f "$WINEHUA_LIBS/libffi.so.8" ]; then
         log "libffi (ARM64) 已就绪，跳过"
         return 0
     fi
@@ -62,14 +62,14 @@ build_libffi_arm64() {
     make -j$JOBS && make install
 
     # 只保留 SONAME
-    cp "$build/install/lib/libffi.so.8.1.4" "$HONWINE_LIBS/libffi.so.8"
-    ln -sf libffi.so.8 "$HONWINE_LIBS/libffi.so"
-    log "libffi (ARM64) → $HONWINE_LIBS"
+    cp "$build/install/lib/libffi.so.8.1.4" "$WINEHUA_LIBS/libffi.so.8"
+    ln -sf libffi.so.8 "$WINEHUA_LIBS/libffi.so"
+    log "libffi (ARM64) → $WINEHUA_LIBS"
 }
 
 # ── 2. wayland (ARM64, server + client) ──
 build_wayland_arm64() {
-    if [ -f "$HONWINE_LIBS/libwayland-server.so.0" ]; then
+    if [ -f "$WINEHUA_LIBS/libwayland-server.so.0" ]; then
         log "wayland (ARM64) 已就绪，跳过"
         return 0
     fi
@@ -89,11 +89,11 @@ build_wayland_arm64() {
 
     ninja -C "$build"
 
-    # 安装 .so 到 HonWine libs
-    cp "$build/src/libwayland-server.so.0.22.0" "$HONWINE_LIBS/libwayland-server.so.0"
-    cp "$build/src/libwayland-client.so.0.22.0" "$HONWINE_LIBS/libwayland-client.so.0"
-    ln -sf libwayland-server.so.0 "$HONWINE_LIBS/libwayland-server.so"
-    ln -sf libwayland-client.so.0 "$HONWINE_LIBS/libwayland-client.so"
+    # 安装 .so 到 WineHua libs
+    cp "$build/src/libwayland-server.so.0.22.0" "$WINEHUA_LIBS/libwayland-server.so.0"
+    cp "$build/src/libwayland-client.so.0.22.0" "$WINEHUA_LIBS/libwayland-client.so.0"
+    ln -sf libwayland-server.so.0 "$WINEHUA_LIBS/libwayland-server.so"
+    ln -sf libwayland-client.so.0 "$WINEHUA_LIBS/libwayland-client.so"
 
     # 安装头文件 (源码头 + 构建生成)
     cp "$src/src/wayland-server-core.h" \
@@ -101,19 +101,19 @@ build_wayland_arm64() {
        "$src/src/wayland-client-core.h" \
        "$src/src/wayland-client.h" \
        "$src/src/wayland-util.h" \
-       "$HONWINE_INC/"
+       "$WINEHUA_INC/"
     # 以下在构建目录中生成
     cp "$build/src/wayland-server-protocol.h" \
        "$build/src/wayland-client-protocol.h" \
        "$build/src/wayland-version.h" \
-       "$HONWINE_INC/"
+       "$WINEHUA_INC/"
 
-    log "wayland (ARM64) → $HONWINE_LIBS"
+    log "wayland (ARM64) → $WINEHUA_LIBS"
 }
 
 # ── 3. xdg-shell + wayland 协议文件 ──
 build_protocols() {
-    if [ -f "$HONWINE/entry/src/main/cpp/xdg-shell-protocol.c" ]; then
+    if [ -f "$WINEHUA/entry/src/main/cpp/xdg-shell-protocol.c" ]; then
         log "协议文件已就绪，跳过"
         return 0
     fi
@@ -123,18 +123,18 @@ build_protocols() {
 
     # wayland core protocol
     local wl_xml="$ROOT/thirdparty/wayland/protocol/wayland.xml"
-    "$scanner" server-header "$wl_xml" "$HONWINE_INC/wayland-server-protocol.h"
-    "$scanner" client-header "$wl_xml" "$HONWINE_INC/wayland-client-protocol.h"
+    "$scanner" server-header "$wl_xml" "$WINEHUA_INC/wayland-server-protocol.h"
+    "$scanner" client-header "$wl_xml" "$WINEHUA_INC/wayland-client-protocol.h"
     "$scanner" code "$wl_xml" /dev/null  # 不需要 server/client code, libwayland 内置了
 
     # xdg-shell protocol
     local xdg_xml="$ROOT/thirdparty/wayland-protocols/stable/xdg-shell/xdg-shell.xml"
-    local cpp_dir="$HONWINE/entry/src/main/cpp"
-    "$scanner" server-header "$xdg_xml" "$HONWINE_INC/xdg-shell-server-protocol.h"
-    "$scanner" client-header "$xdg_xml" "$HONWINE_INC/xdg-shell-client-protocol.h"
+    local cpp_dir="$WINEHUA/entry/src/main/cpp"
+    "$scanner" server-header "$xdg_xml" "$WINEHUA_INC/xdg-shell-server-protocol.h"
+    "$scanner" client-header "$xdg_xml" "$WINEHUA_INC/xdg-shell-client-protocol.h"
     "$scanner" private-code "$xdg_xml" "$cpp_dir/xdg-shell-protocol.c"
 
-    log "协议文件 → $HONWINE_INC + $cpp_dir"
+    log "协议文件 → $WINEHUA_INC + $cpp_dir"
 }
 
 # ── main ──
@@ -143,6 +143,6 @@ build_wayland_arm64
 build_protocols
 
 log "ARM64 Wayland compositor 依赖就绪"
-log "  libs:  $HONWINE_LIBS"
-log "  inc:   $HONWINE_INC"
-log "  proto: $HONWINE/entry/src/main/cpp/xdg-shell-protocol.c"
+log "  libs:  $WINEHUA_LIBS"
+log "  inc:   $WINEHUA_INC"
+log "  proto: $WINEHUA/entry/src/main/cpp/xdg-shell-protocol.c"

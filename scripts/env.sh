@@ -33,7 +33,7 @@ SYSROOT_EXT_PC="$SYSROOT_EXT/usr/lib/pkgconfig"
 SYSROOT_EXT_SHARE="$SYSROOT_EXT/usr/share"
 
 # HAP 项目
-HONWINE="$ROOT"
+WINEHUA="$ROOT"
 
 # 编译并行
 JOBS=${JOBS:-$(nproc)}

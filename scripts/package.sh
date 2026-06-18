@@ -14,19 +14,19 @@ package_hnp() {
 
 package_hap() {
     log "=== 打包 HAP ==="
-    local unsigned_hap="$HONWINE/entry/build/default/outputs/default/entry-default-unsigned.hap"
-    local signed_hap="$HONWINE/entry/build/default/outputs/default/entry-default-signed.hap"
+    local unsigned_hap="$WINEHUA/entry/build/default/outputs/default/entry-default-unsigned.hap"
+    local signed_hap="$WINEHUA/entry/build/default/outputs/default/entry-default-signed.hap"
 
-    mkdir -p "$HONWINE/entry/hnp/arm64-v8a"
-    cp "$OUT_DIR/honwine.hnp" "$HONWINE/entry/hnp/arm64-v8a/honwine.hnp"
+    mkdir -p "$WINEHUA/entry/hnp/arm64-v8a"
+    cp "$OUT_DIR/honwine.hnp" "$WINEHUA/entry/hnp/arm64-v8a/honwine.hnp"
 
-    cd "$HONWINE"
+    cd "$WINEHUA"
     hvigorw assembleHap || { err "hvigorw assembleHap 失败"; return 1; }
 
-    cd "$HONWINE/entry"
+    cd "$WINEHUA/entry"
     zip -r "$unsigned_hap" hnp
 
-    cd "$HONWINE"
+    cd "$WINEHUA"
     python3 sign.py "$unsigned_hap" "$signed_hap"
 
     ls -lh "$signed_hap"
@@ -35,7 +35,7 @@ package_hap() {
 
 deploy() {
     local device="${1:-192.168.1.4:38879}"
-    local hap="$HONWINE/entry/build/default/outputs/default/entry-default-signed.hap"
+    local hap="$WINEHUA/entry/build/default/outputs/default/entry-default-signed.hap"
 
     if [ ! -f "$hap" ]; then
         err "HAP 文件不存在: $hap"

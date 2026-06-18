@@ -22,7 +22,7 @@ export PATH=$TOOL_HOME/tool/node/bin:$PATH
 export OHOS_ARCH=aarch64
 export OHOS_ABI=arm64-v8a
 
-build_honwine_hap() {
+build_winehua_hap() {
 	hvigorw assembleHap
 	# add hnp, and sign manually
 	pushd ${PROJ_BASE_HOME}/entry
@@ -30,11 +30,11 @@ build_honwine_hap() {
 	popd
 }
 
-build_honwine_hnps() {
+build_winehua_hnps() {
 	cd ${PROJ_BASE_HOME} && make -C build-hnp
 }
 
-sign_honwine() {
+sign_winehua() {
 	pushd ${PROJ_BASE_HOME}
 		python3 sign.py ./entry/build/default/outputs/default/entry-default-unsigned.hap ./entry/build/default/outputs/default/entry-default-signed.hap
 	popd
@@ -42,9 +42,9 @@ sign_honwine() {
 
 helpusage() {
 	echo "Usage: $(basename $0)"
-	echo "    -b		Build HonWine HNPs and HAP"
-	echo "    -s		Sign HonWine HAP Package, needed setup Key Signing in DevEco Studio"
-	echo "    -p		Push HonWine HAP to device"
+	echo "    -b		Build WineHua HNPs and HAP"
+	echo "    -s		Sign WineHua HAP Package, needed setup Key Signing in DevEco Studio"
+	echo "    -p		Push WineHua HAP to device"
 }
 
 hdc_push() {
@@ -53,18 +53,18 @@ hdc_push() {
 	"$OHOS_SDK_HOME/toolchains/hdc" shell aa start -a EntryAbility -b $(jq ".app.bundleName" AppScope/app.json5)
 }
 
-build_honwine() {
-	build_honwine_hnps
-	build_honwine_hap
+build_winehua() {
+	build_winehua_hnps
+	build_winehua_hap
 }
 
 while getopts ":bsph:" optargs; do
 	case ${optargs} in
 		b)
-			build_honwine
+			build_winehua
 			;;
 		s)
-			sign_honwine
+			sign_winehua
 			;;
 		p)
 			hdc_push

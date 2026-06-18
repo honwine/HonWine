@@ -8,8 +8,8 @@ Wine 和 Box64 有定制修改，通过 GitHub fork + git submodule 管理。
 
 | 组件 | submodule 路径 | fork |
 |------|---------------|------|
-| Wine | `thirdparty/wine` | `honwine/wine` (fork from `wine-mirror/wine`) |
-| Box64 | `thirdparty/box64` | `honwine/box64` (fork from `ptitSeb/box64`) |
+| Wine | `thirdparty/wine` | `winehua/wine` (fork from `wine-mirror/wine`) |
+| Box64 | `thirdparty/box64` | `winehua/box64` (fork from `ptitSeb/box64`) |
 
 其余 submodule (freetype, wayland, libxkbcommon, xkeyboard-config 等) 无定制修改，直接跟踪上游 release tag。
 

@@ -5,7 +5,7 @@
 - **设备**: HAD-W32 (ARM64)
 - **内核**: Linux 39-bit 地址空间
 - **终端测试**: hdc shell, 无 app 沙箱
-- **应用测试**: HonWine app, 带 `ALLOW_WRITABLE_CODE_MEMORY` + `DISABLE_CODE_MEMORY_PROTECTION`
+- **应用测试**: WineHua app, 带 `ALLOW_WRITABLE_CODE_MEMORY` + `DISABLE_CODE_MEMORY_PROTECTION`
 
 ## 对比结果
 

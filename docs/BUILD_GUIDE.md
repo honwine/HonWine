@@ -58,14 +58,14 @@ wineohos/
 │   ├── assemble.sh                # 组装 HNP 布局
 │   └── package.sh                 # 打包 HNP/HAP
 ├── thirdparty/                    # git submodule
-│   ├── wine/                      # honwine/wine (fork)
-│   ├── box64/                     # honwine/box64 (fork)
+│   ├── wine/                      # winehua/wine (fork)
+│   ├── box64/                     # winehua/box64 (fork)
 │   ├── freetype/
 │   ├── wayland/
 │   ├── libxkbcommon/
 │   ├── xkeyboard-config/
 │   └── ...
-├── HonWine/                       # HarmonyOS 应用
+├── WineHua/                       # HarmonyOS 应用
 │   └── entry/src/main/
 │       ├── cpp/                   # C++ (Wayland compositor, InputManager)
 │       └── ets/                   # ArkTS (WineWindow, WineWindowManager)

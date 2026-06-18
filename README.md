@@ -1,4 +1,4 @@
-# HonWine — Wine on HarmonyOS
+# WineHua — Wine on HarmonyOS
 
 在 HarmonyOS (OpenHarmony) 设备上运行 Windows x86_64 程序，通过 Box64 指令翻译 + 嵌入式 Wayland compositor。
 
@@ -49,7 +49,7 @@ bash build.sh deploy <device_ip>
 ## 目录结构
 
 ```
-HonWine/
+WineHua/
 ├── entry/src/main/
 │   ├── cpp/                   # Native (C++): Wayland compositor, EGL, Input
 │   │   ├── wayland_server.cpp # 嵌入式 Wayland compositor
