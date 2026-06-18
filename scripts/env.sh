@@ -36,7 +36,7 @@ SYSROOT_EXT_SHARE="$SYSROOT_EXT/usr/share"
 PATCHES_DIR="$ROOT/patches"
 
 # HAP 项目
-HONWINE="$ROOT/HonWine"
+HONWINE="$ROOT"
 
 # 编译并行
 JOBS=${JOBS:-$(nproc)}

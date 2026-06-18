@@ -13,28 +13,39 @@
 *.swp
 *.swo
 
-.claude
-
 # OS
 .DS_Store
 Thumbs.db
 
-# Reference projects (not tracked)
+# Claude
+.claude
+
+# Temp
 .temp/
 
-# Build output
+# Build output (root)
 build/
 out/
 
-# HAP build outputs
-HonWine/entry/build/
-HonWine/entry/.cxx/
-HonWine/.hvigor/
-HonWine/entry/oh_modules/
-HonWine/entry/hnp/
+# HAP project
+/node_modules
+/oh_modules
+/local.properties
+**/build
+/.hvigor
+.cxx
+/.clangd
+/.clang-format
+/.clang-tidy
+**/.test
+/.appanalyzer
+/.ohos
+/entry/libs
+/build-profile.json5
 
 # Third-party submodule build artifacts
 thirdparty/wine/build-*/
 thirdparty/wine/*.bak
 thirdparty/box64/build*/
 thirdparty/freetype-VER-2-13-3/
+/entry/hnp
