@@ -2,6 +2,8 @@
 
 在 HarmonyOS (OpenHarmony) 设备上运行 Windows x86_64 程序，通过 Box64 指令翻译 + 嵌入式 Wayland compositor。
 
+![运行效果](docs/images/run_wine_example.jpg)
+
 ## 架构
 
 ```
@@ -73,7 +75,7 @@ HonWine/
 
 - **Box64**: x86_64 → ARM64 指令翻译，Dynarec 模式
 - **Wayland compositor**: HAP 进程内嵌入式 compositor，不依赖外部 Wayland 服务
-- **surfaceId 架构**: 不用 `libraryname`，通过 `XComponentController` 回调获取 surfaceId，彻底解决多窗口冲突
+- **surfaceId 架构**: 通过 `XComponentController` 回调获取 surfaceId，彻底解决多窗口冲突
 - **noexec 文件系统**: 可执行段用匿名 mmap + pread 替代文件映射
 - **dosdevices symlink**: OHOS 沙箱禁止 symlink()，四条代码路径全覆盖 fallback
 - **XKB 键盘**: xkeyboard-config 打包到 HNP，通过 `XKB_CONFIG_ROOT` 指向
