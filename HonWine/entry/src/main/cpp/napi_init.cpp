@@ -193,7 +193,6 @@ static void LaunchThreadFunc(LaunchParams* p) {
     for (auto& s : p->envStrs) p->envp.push_back((char*)s.c_str());
     p->envp.push_back(nullptr);
 
-    mkdir("/storage/Users/currentUser/workspace/wine", 0755);
     mkdir("/data/storage/el2/base/files/.wine", 0755);
 
     // 通知 ArkTS: wineserver 启动中
@@ -209,12 +208,8 @@ static void LaunchThreadFunc(LaunchParams* p) {
         for (auto& s : wsEnvStrs) wsEnvp.push_back((char*)s.c_str());
         wsEnvp.push_back(nullptr);
 
-        int wsErrFd = open("/storage/Users/currentUser/workspace/wine/wineserver_logs.txt",
-                           O_WRONLY|O_CREAT|O_TRUNC, 0644);
         pid_t wsPid = fork();
         if (wsPid == 0) {
-            dup2(wsErrFd, STDERR_FILENO);
-            if (wsErrFd > 2) close(wsErrFd);
             CloseInheritedFds(STDOUT_FILENO, STDERR_FILENO);
             for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
             prctl(PR_SET_NAME, "wl-wineserver", 0, 0, 0);
@@ -223,8 +218,6 @@ static void LaunchThreadFunc(LaunchParams* p) {
             execve("./box64", (char* const*)wsArgv, wsEnvp.data());
             _exit(127);
         }
-        if (wsErrFd > 2) close(wsErrFd);
-
         if (wsPid > 0) {
             OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver pid=%{public}d, waiting 1.5s...", wsPid);
             usleep(1500000);
@@ -251,9 +244,6 @@ static void LaunchThreadFunc(LaunchParams* p) {
             prctl(PR_SET_NAME, "wl-wineboot", 0, 0, 0);
             chdir(p->honwineBin.c_str());
             const char* bootArgv[] = {"./box64", "./wine", "./wineboot", "--init", nullptr};
-            int bootFd = open("/storage/Users/currentUser/workspace/wine/wineboot_logs.txt",
-                              O_WRONLY|O_CREAT|O_TRUNC, 0644);
-            if (bootFd >= 0) dup2(bootFd, STDERR_FILENO);
             execve("./box64", (char* const*)bootArgv, p->envp.data());
             _exit(127);
         }
