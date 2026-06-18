@@ -161,17 +161,20 @@ struct Index {
         if (!this.prefixReady) {
           Button('初始化 Wine')
             .fontSize(14)
+            .enabled(this.state != 'wineserver-starting' && this.state != 'wineboot-starting')
             .onClick(this.doInit)
         } else {
           Row() {
             Button('重置 Wine 环境')
               .fontSize(13).backgroundColor('#833')
+              .enabled(this.state != 'wineserver-starting' && this.state != 'wineboot-starting' && this.state != 'wine-running')
               .onClick(this.doReset)
               .margin({ right: 8 })
             Text('|')
               .fontSize(13).fontColor('#555').margin({ left: 4, right: 4 })
             Button('重新初始化')
               .fontSize(13).backgroundColor('#444')
+              .enabled(this.state != 'wineserver-starting' && this.state != 'wineboot-starting' && this.state != 'wine-running')
               .onClick(this.doInit)
           }
         }
@@ -209,6 +212,7 @@ struct Index {
                 if (this.isExe(name)) {
                   Button('启动')
                     .fontSize(12).height(28)
+                    .enabled(this.state != 'wineserver-starting' && this.state != 'wineboot-starting')
                     .onClick(() => this.doRun(name))
                 }
               }
