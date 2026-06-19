@@ -1,6 +1,7 @@
 #include "wayland_server.h"
 #include "seat.h"
 #include "input_manager.h"
+#include "xdg_shell.h"
 #include "fps_counter.h"
 #include "include/viewporter-server-protocol.h"
 #include "include/xdg-shell-server-protocol.h"
@@ -542,6 +543,48 @@ void WaylandServer::SendToplevelClose(uint32_t toplevelId) {
     } else {
         OH_LOG_WARN(LOG_APP, "[MW] SendToplevelClose id=%{public}u NOT found", toplevelId);
     }
+}
+
+void WaylandServer::NotifyWindowRestored(uint32_t toplevelId) {
+    // 1. 取 toplevel resource
+    wl_resource* tl = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(toplevelResMutex_);
+        auto it = toplevelResources_.find(toplevelId);
+        if (it != toplevelResources_.end()) {
+            tl = it->second;
+        }
+    }
+    if (!tl) {
+        OH_LOG_WARN(LOG_APP, "[MW] NotifyWindowRestored id=%{public}u NOT found", toplevelId);
+        return;
+    }
+
+    // 2. 遍历 toplevel → xdg_surface → wl_surface → SurfaceData
+    auto* td = static_cast<ToplevelData*>(wl_resource_get_user_data(tl));
+    if (!td || !td->xdgSurface) return;
+    auto* xdg = static_cast<XdgSurface*>(wl_resource_get_user_data(td->xdgSurface));
+    if (!xdg || !xdg->wlSurface) return;
+    auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(xdg->wlSurface));
+    if (!sd) return;
+
+    // 3. 清除 minimized 标志
+    sd->minimized = false;
+
+    // 4. 发 xdg_toplevel configure (ACTIVE 状态, 告知 Wine 窗口已恢复)
+    wl_array states;
+    wl_array_init(&states);
+    uint32_t* st = static_cast<uint32_t*>(wl_array_add(&states, sizeof(uint32_t)));
+    *st = XDG_TOPLEVEL_STATE_ACTIVATED;
+    xdg_toplevel_send_configure(tl, 0, 0, &states);
+    wl_array_release(&states);
+
+    // 5. 发 xdg_surface configure
+    wl_client* client = wl_resource_get_client(tl);
+    wl_display* dpy = wl_client_get_display(client);
+    xdg_surface_send_configure(xdg->xdgSurface, wl_display_next_serial(dpy));
+
+    OH_LOG_INFO(LOG_APP, "[MW] NotifyWindowRestored id=%{public}u → xdg configure ACTIVE", toplevelId);
 }
 
 // -- toplevelId -> wl_surface 映射 (供 Seat::InjectPointerEnter 查找) --

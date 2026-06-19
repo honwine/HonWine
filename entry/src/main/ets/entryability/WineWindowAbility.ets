@@ -72,12 +72,18 @@ export default class WineWindowAbility extends UIAbility {
       // 应用 pending 事件
       WineWindowManager.getInstance().flushPendingEvents(this.toplevelId);
 
-      // 监听窗口事件 (关闭 / 最小化 / 最大化等)
+      // 监听窗口事件 (关闭 / 最小化 / 恢复等)
       mainWindow.on('windowEvent', (eventType: number) => {
         hilog.info(DOMAIN, TAG, '[WWA] #%{public}d windowEvent type=%{public}d', this.toplevelId, eventType);
         if (eventType === window.WindowEventType.WINDOW_DESTROYED) {
           hilog.info(DOMAIN, TAG, '[WWA] #%{public}d  WINDOW_DESTROYED (user closed)', this.toplevelId);
           this.cleanup();
+        } else if (eventType === window.WindowEventType.WINDOW_SHOWN) {
+          hilog.info(DOMAIN, TAG, '[WWA] #%{public}d  WINDOW_SHOWN → resume input', this.toplevelId);
+          try { testNapi.setToplevelVisible(this.toplevelId, true); } catch (_) {}
+        } else if (eventType === window.WindowEventType.WINDOW_HIDDEN) {
+          hilog.info(DOMAIN, TAG, '[WWA] #%{public}d  WINDOW_HIDDEN → suppress input', this.toplevelId);
+          try { testNapi.setToplevelVisible(this.toplevelId, false); } catch (_) {}
         }
       });
 

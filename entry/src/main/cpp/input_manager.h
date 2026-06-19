@@ -66,6 +66,9 @@ public:
     // 如果不重置, 会导致 Wayland 协议错误 "invalid object" → Wine 断开连接
     void OnSurfaceDestroyed(wl_resource* surface);
 
+    // -- 窗口可见性 (输入抑制) --
+    void SetToplevelVisible(uint32_t tl, bool visible);
+
     // -- Focus 查询 (线程安全) --
     bool HasPointerFocus() const { return pointerFocusedToplevel_.load() != 0; }
     bool NeedsPointerEnter() const;
@@ -136,4 +139,8 @@ private:
     std::atomic<uint32_t> keyboardFocusedToplevel_{0};
     wl_resource* keyboardFocusedSurface_ = nullptr;
     std::atomic<bool> keyboardEntered_{false};
+
+    // 窗口可见性 (鸿蒙侧最小化时抑制输入)
+    std::mutex visibleMutex_;
+    std::unordered_map<uint32_t, bool> toplevelVisible_;
 };

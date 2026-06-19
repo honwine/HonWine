@@ -1344,6 +1344,21 @@ static napi_value SendScrollEvent(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+static napi_value SetToplevelVisible(napi_env env, napi_callback_info info) {
+    size_t argc = 2;
+    napi_value args[2];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc < 2) return nullptr;
+    uint32_t tl; bool visible;
+    napi_get_value_uint32(env, args[0], &tl);
+    napi_get_value_bool(env, args[1], &visible);
+    InputManager::GetInstance()->SetToplevelVisible(tl, visible);
+    if (visible) {
+        WaylandServer::GetInstance()->NotifyWindowRestored(tl);
+    }
+    return nullptr;
+}
+
 // -- NAPI: getProcessList — 返回运行中进程列表 --
 static napi_value GetProcessList(napi_env env, napi_callback_info info) {
     std::lock_guard<std::mutex> lock(gProcMutex);
@@ -1435,8 +1450,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         // ArkTS input forwarding (unified InputManager path)
         {"sendPointerEvent", nullptr, SendPointerEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendKeyEvent",     nullptr, SendKeyEvent,     nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"sendScrollEvent",  nullptr, SendScrollEvent,  nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"getProcessList",  nullptr, GetProcessList,  nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"sendScrollEvent",   nullptr, SendScrollEvent,   nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setToplevelVisible",nullptr, SetToplevelVisible,nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getProcessList",   nullptr, GetProcessList,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"killProcess",     nullptr, KillProcess,     nullptr, nullptr, nullptr, napi_default, nullptr},
         {"termRun",       nullptr, TermRun,      nullptr, nullptr, nullptr, napi_default, nullptr},
         {"termSend",      nullptr, TermSend,     nullptr, nullptr, nullptr, napi_default, nullptr},

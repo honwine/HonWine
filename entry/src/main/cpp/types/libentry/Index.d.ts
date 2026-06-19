@@ -18,6 +18,7 @@ export const destroyRenderer: (toplevelId: number) => void;
 export const sendPointerEvent: (toplevelId: number, action: number, px: number, py: number, button: number) => void;
 export const sendKeyEvent: (toplevelId: number, evdevCode: number, pressed: boolean) => void;
 export const sendScrollEvent: (toplevelId: number, axis: number, value: number, scrollStep: number, px: number, py: number) => void;
+export const setToplevelVisible: (toplevelId: number, visible: boolean) => void;
 export const getProcessList: () => Array<{pid: number, name: string, path: string, state: string}>;
 export const killProcess: (pid: number) => boolean;
 export const runMmapTests: () => string;

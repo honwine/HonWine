@@ -259,7 +259,20 @@ void InputManager::UpdateModifiers(int evdevCode, bool pressed) {
 //  NAPI 入口 (JS 线程)
 // ========================================================================
 
+void InputManager::SetToplevelVisible(uint32_t tl, bool visible) {
+    std::lock_guard<std::mutex> lk(visibleMutex_);
+    toplevelVisible_[tl] = visible;
+    OH_LOG_INFO(LOG_APP, "[Input] SetToplevelVisible tl=%{public}u visible=%{public}s", tl, visible ? "true" : "false");
+}
+
 void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double py, int button) {
+    // 窗口不可见时抑制输入
+    {
+        std::lock_guard<std::mutex> lk(visibleMutex_);
+        auto it = toplevelVisible_.find(tl);
+        if (it != toplevelVisible_.end() && !it->second) return;
+    }
+
     auto* seat = Seat::GetInstance();
 
     // ArkTS MouseAction: Press=1, Release=2, Move=3
@@ -351,6 +364,13 @@ void InputManager::SendPointerEvent(uint32_t tl, int action, double px, double p
 }
 
 void InputManager::SendKeyEvent(uint32_t tl, int evdevCode, bool pressed) {
+    // 窗口不可见时抑制输入
+    {
+        std::lock_guard<std::mutex> lk(visibleMutex_);
+        auto it = toplevelVisible_.find(tl);
+        if (it != toplevelVisible_.end() && !it->second) return;
+    }
+
     auto* seat = Seat::GetInstance();
 
     OH_LOG_INFO(LOG_APP, "[Input] KEY tl=%{public}u evdev=%{public}d pressed=%{public}d"

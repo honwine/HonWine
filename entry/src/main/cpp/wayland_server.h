@@ -46,6 +46,8 @@ public:
     void RegisterToplevelResource(uint32_t toplevelId, wl_resource* tl);
     void UnregisterToplevelResource(uint32_t toplevelId);
     void SendToplevelClose(uint32_t toplevelId);
+    // 鸿蒙侧恢复最小化窗口时调用: 清除 minimized 标志 + 发 configure 通知 Wine
+    void NotifyWindowRestored(uint32_t toplevelId);
 
     // -- wayland 协议实现 --
     static void compositor_bind(wl_client*, void*, uint32_t, uint32_t);
@@ -155,6 +157,9 @@ struct SurfaceData {
     wl_resource* parentSurface = nullptr;     // 父 wl_surface (仅 subsurface)
     int32_t subsurfaceX = 0, subsurfaceY = 0; // wl_subsurface.set_position
     bool isSubsurface = false;
+
+    // minimize state
+    bool minimized = false;
 
     // xdg_toplevel resize 约束 (0 = 无限制)
     bool hasSizeLimits = false;

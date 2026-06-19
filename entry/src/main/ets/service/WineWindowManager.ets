@@ -295,6 +295,8 @@ export class WineWindowManager {
           hilog.info(DOMAIN, TAG, '[MW]   pending queue size now: %{public}d', q.length);
         }
         break;
+      case 'minimized':
+      case 'restored':
       case 'limits':
         if (this.windows.has(id)) {
           this.applyEvent(id, event, data);
@@ -376,6 +378,18 @@ export class WineWindowManager {
         } catch (e) {
           hilog.warn(DOMAIN, TAG, '[MW] applyEvent limits parse error: %{public}s', JSON.stringify(e));
         }
+        break;
+      case 'minimized':
+        hilog.info(DOMAIN, TAG, '[MW] minimizeWindow #%{public}d', toplevelId);
+        win.minimize().catch((e: Error) => {
+          hilog.warn(DOMAIN, TAG, '[MW] minimize #%{public}d failed: %{public}s', toplevelId, JSON.stringify(e));
+        });
+        break;
+      case 'restored':
+        hilog.info(DOMAIN, TAG, '[MW] showWindow #%{public}d', toplevelId);
+        win.showWindow().catch((e: Error) => {
+          hilog.warn(DOMAIN, TAG, '[MW] showWindow #%{public}d failed: %{public}s', toplevelId, JSON.stringify(e));
+        });
         break;
     }
   }

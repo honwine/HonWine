@@ -1,6 +1,7 @@
 #include <wayland-server-core.h>
 #include "include/xdg-shell-server-protocol.h"
 #include "wayland_server.h"
+#include "xdg_shell.h"
 #include <algorithm>
 #include <cstring>
 #include <string>
@@ -11,21 +12,6 @@
 #include <hilog/log.h>
 
 namespace {
-
-struct XdgSurface {
-    wl_resource* wlSurface = nullptr;
-    wl_resource* xdgSurface = nullptr;
-    wl_resource* xdgToplevel = nullptr;
-    uint32_t toplevelId = 0;  // 在 xs_get_toplevel 时分配，供 toplevel 销毁回调使用
-};
-
-// Toplevel 独立的 user_data，不共享 XdgSurface*
-// 解决 wl_client_destroy 时 xs_resource_destroy 先释放 XdgSurface，
-// 然后 tl_resource_destroy 访问野指针的问题
-struct ToplevelData {
-    uint32_t toplevelId = 0;
-    wl_resource* xdgSurface = nullptr;  // 回指针，供 tl_set_title 等操作
-};
 
 // -- xdg_toplevel 实现 (最小: 记录 title, 其余空) --
 static void tl_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
@@ -98,11 +84,35 @@ static void tl_set_max_size(wl_client*, wl_resource* tlRes, int32_t w, int32_t h
                 sd->toplevelId, w, h);
     fire_limits_event(sd);
 }
-static void tl_set_maximized(wl_client*, wl_resource*) {}
+static void tl_set_maximized(wl_client*, wl_resource* tlRes) {
+    auto* td = static_cast<ToplevelData*>(wl_resource_get_user_data(tlRes));
+    if (!td || !td->xdgSurface) return;
+    auto* xdg = static_cast<XdgSurface*>(wl_resource_get_user_data(td->xdgSurface));
+    if (!xdg || !xdg->wlSurface) return;
+    auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(xdg->wlSurface));
+    if (!sd) return;
+
+    if (sd->minimized) {
+        sd->minimized = false;
+        WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "restored");
+        OH_LOG_INFO(LOG_APP, "[XDG] tl_set_maximized → restore tl=%{public}u", sd->toplevelId);
+    }
+}
 static void tl_unset_maximized(wl_client*, wl_resource*) {}
 static void tl_set_fullscreen(wl_client*, wl_resource*, wl_resource*) {}
 static void tl_unset_fullscreen(wl_client*, wl_resource*) {}
-static void tl_set_minimized(wl_client*, wl_resource*) {}
+static void tl_set_minimized(wl_client*, wl_resource* tlRes) {
+    auto* td = static_cast<ToplevelData*>(wl_resource_get_user_data(tlRes));
+    if (!td || !td->xdgSurface) return;
+    auto* xdg = static_cast<XdgSurface*>(wl_resource_get_user_data(td->xdgSurface));
+    if (!xdg || !xdg->wlSurface) return;
+    auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(xdg->wlSurface));
+    if (!sd) return;
+
+    sd->minimized = true;
+    WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "minimized");
+    OH_LOG_INFO(LOG_APP, "[XDG] tl_set_minimized tl=%{public}u", sd->toplevelId);
+}
 
 static const struct xdg_toplevel_interface kToplevelImpl = {
     .destroy          = tl_destroy,
