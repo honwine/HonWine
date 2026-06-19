@@ -73,7 +73,7 @@ public:
     static void subcompositor_get_subsurface(wl_client*, wl_resource*, uint32_t, wl_resource*, wl_resource*);
     /* wl_subsurface */
     static void subsurface_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
-    static void subsurface_set_position(wl_client*, wl_resource*, int32_t, int32_t) {}
+    static void subsurface_set_position(wl_client*, wl_resource*, int32_t, int32_t);
     static void subsurface_place_above(wl_client*, wl_resource*, wl_resource*) {}
     static void subsurface_place_below(wl_client*, wl_resource*, wl_resource*) {}
     static void subsurface_set_sync(wl_client*, wl_resource*) {}
@@ -150,4 +150,9 @@ struct SurfaceData {
     // xdg_surface window geometry (content area within buffer), 默认全 buffer
     bool hasWindowGeometry = false;
     int geoX = 0, geoY = 0, geoW = 0, geoH = 0;
+
+    // subsurface 父子追踪 (用于 popup 菜单合成到父 toplevel)
+    wl_resource* parentSurface = nullptr;     // 父 wl_surface (仅 subsurface)
+    int32_t subsurfaceX = 0, subsurfaceY = 0; // wl_subsurface.set_position
+    bool isSubsurface = false;
 };

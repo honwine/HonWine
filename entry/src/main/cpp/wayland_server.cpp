@@ -188,8 +188,33 @@ void WaylandServer::subcompositor_bind(wl_client* client, void* data, uint32_t v
 void WaylandServer::subcompositor_get_subsurface(wl_client* client, wl_resource*,
                                                   uint32_t id, wl_resource* surface,
                                                   wl_resource* parent) {
+    // 追踪 subsurface 父子关系:
+    // 子 surface → 记录父 surface 指针, 标记 isSubsurface
+    // wl_subsurface 的 user_data 存子 surface, 供 set_position 查找
+    auto* childSd = static_cast<SurfaceData*>(wl_resource_get_user_data(surface));
+    if (childSd) {
+        childSd->parentSurface = parent;
+        childSd->isSubsurface = true;
+        OH_LOG_INFO(LOG_APP, "[MW-SUBSURF] subsurface created: child=%p parent=%p",
+                    surface, parent);
+    }
+
+    // wl_subsurface resource 的 user_data = 子 surface (供 set_position 查找 SurfaceData)
     wl_resource* ss = wl_resource_create(client, &wl_subsurface_interface, 1, id);
-    wl_resource_set_implementation(ss, &kSubsurfaceImpl, nullptr, nullptr);
+    wl_resource_set_implementation(ss, &kSubsurfaceImpl, surface, nullptr);
+}
+
+void WaylandServer::subsurface_set_position(wl_client*, wl_resource* ssRes,
+                                             int32_t x, int32_t y) {
+    // ssRes 的 user_data 是子 surface (在 get_subsurface 中设置)
+    auto* childSurf = static_cast<wl_resource*>(wl_resource_get_user_data(ssRes));
+    if (!childSurf) return;
+    auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(childSurf));
+    if (!sd) return;
+    sd->subsurfaceX = x;
+    sd->subsurfaceY = y;
+    OH_LOG_INFO(LOG_APP, "[MW-SUBSURF] set_position: child=%p pos=(%d,%d)",
+                childSurf, x, y);
 }
 
 // -- viewporter 实现 --
@@ -351,6 +376,56 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
                 OH_LOG_INFO(LOG_APP, "[MW] toplevel #%{public}u size changed: %{public}dx%{public}d -> ArkTS",
                             sd->toplevelId, contentW, contentH);
                 self->FireToplevelEvent(sd->toplevelId, "resize", json);
+            }
+        }
+        // subsurface 合成: 将 popup 像素合成到父 toplevel 的 framebuffer
+        // 解决右键菜单/下拉菜单无法显示的问题
+        if (sd->isSubsurface && sd->parentSurface && sd->pixels.size() > 0) {
+            auto* parentSd = static_cast<SurfaceData*>(wl_resource_get_user_data(sd->parentSurface));
+            if (parentSd && parentSd->hasToplevel) {
+                uint32_t parentId = parentSd->toplevelId;
+                std::lock_guard<std::mutex> lk(self->toplevelMutex_);
+                auto it = self->toplevelPixels_.find(parentId);
+                if (it != self->toplevelPixels_.end()) {
+                    int parentW = self->toplevelW_[parentId];
+                    int parentH = self->toplevelH_[parentId];
+                    int popupW = sd->w;
+                    int popupH = sd->h;
+                    // subsurface 坐标是相对父 surface 原始 buffer 的,
+                    // 但 toplevelPixels_ 是 window_geometry 裁剪后的 tight buffer,
+                    // 需要减去父 surface 的 geo 偏移
+                    int popupX = sd->subsurfaceX - parentSd->geoX;
+                    int popupY = sd->subsurfaceY - parentSd->geoY;
+
+                    // 计算 popup 与父 framebuffer 的可见交集 (裁剪超出窗口的部分)
+                    int srcX = (popupX < 0) ? -popupX : 0;
+                    int srcY = (popupY < 0) ? -popupY : 0;
+                    int dstX = (popupX > 0) ? popupX : 0;
+                    int dstY = (popupY > 0) ? popupY : 0;
+                    int copyW = popupW - srcX;
+                    int copyH = popupH - srcY;
+                    if (dstX + copyW > parentW) copyW = parentW - dstX;
+                    if (dstY + copyH > parentH) copyH = parentH - dstY;
+
+                    if (copyW > 0 && copyH > 0) {
+                        auto& parentBuf = it->second;
+                        for (int y = 0; y < copyH; y++) {
+                            for (int x = 0; x < copyW; x++) {
+                                int srcIdx = ((srcY + y) * popupW + (srcX + x)) * 4;
+                                int dstIdx = ((dstY + y) * parentW + (dstX + x)) * 4;
+                                //  popup buffer 是 XRGB (byte3 非 alpha):
+                                //  内容像素 byte3=0, padding 像素 byte3=255
+                                //  跳过 padding 像素
+                                if (sd->pixels[srcIdx + 3] == 255) continue;
+                                std::memcpy(&parentBuf[dstIdx], &sd->pixels[srcIdx], 4);
+                            }
+                        }
+                        self->toplevelDirty_[parentId] = true;
+                        OH_LOG_INFO(LOG_APP, "[MW-SUBSURF] composited popup %{public}dx%{public}d at (%{public}d,%{public}d) -> toplevel #%{public}u parent=%{public}dx%{public}d visible=%{public}dx%{public}d+%{public}d,%{public}d",
+                                    popupW, popupH, popupX, popupY, parentId, parentW, parentH,
+                                    copyW, copyH, dstX, dstY);
+                    }
+                }
             }
         }
         wl_shm_buffer_end_access(shm);
