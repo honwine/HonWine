@@ -39,6 +39,7 @@ public:
 
     // 辅助: toplevelId -> EglRenderer 查找 (InputManager 坐标转换使用)
     EglRenderer* GetRendererForToplevel(uint32_t tid);
+    size_t GetRendererCount() const { return toplevelRenderers_.size(); }
 
 private:
     PluginManager() = default;

@@ -83,7 +83,7 @@ struct WineWindow {
       const py = vp2px(event.y);
       const btn = mapMouseButton(event.button);
       if (event.action !== MouseAction.Move) {
-        hilog.info(DOMAIN, 'WineWindow', '[Input] MOUSE tl=%{public}d action=%{public}d px=(%{public}d,%{public}d) btn=0x%{public}x',
+        hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE tl=%{public}d action=%{public}d px=(%{public}d,%{public}d) btn=0x%{public}x',
           this.toplevelId, event.action, Math.round(px), Math.round(py), btn);
       }
       testNapi.sendPointerEvent(this.toplevelId, event.action, px, py, btn);
@@ -91,17 +91,17 @@ struct WineWindow {
 
     // -- 键盘事件 --
     .onKeyEvent((event: KeyEvent) => {
-      hilog.info(DOMAIN, 'WineWindow', '[KBD-DEBUG] onKeyEvent FIRED! keyCode=%{public}d type=%{public}d tl=%{public}d',
+      hilog.info(DOMAIN, 'KBD-PIPE', '[ArkTS] onKeyEvent keyCode=%{public}d type=%{public}d tl=%{public}d',
         event.keyCode, event.type, this.toplevelId);
       if (this.toplevelId <= 0) return;
       event.stopPropagation();
       const evdevCode = OH2EVDEV[event.keyCode] ?? 0;
       if (evdevCode === 0) {
-        hilog.warn(DOMAIN, 'WineWindow', '[Input] KEY unmapped ohosCode=%{public}d', event.keyCode);
+        hilog.warn(DOMAIN, 'KBD-PIPE', '[ArkTS] KEY unmapped ohosCode=%{public}d', event.keyCode);
         return;
       }
       const pressed = (event.type === KeyType.Down);
-      hilog.info(DOMAIN, 'WineWindow', '[Input] KEY tl=%{public}d ohos=%{public}d->evdev=%{public}d %{public}s',
+      hilog.info(DOMAIN, 'KBD-PIPE', '[ArkTS] KEY ohos=%{public}d->evdev=%{public}d %{public}s',
         this.toplevelId, event.keyCode, evdevCode, pressed ? 'DOWN' : 'UP');
       testNapi.sendKeyEvent(this.toplevelId, evdevCode, pressed);
     })

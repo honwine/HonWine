@@ -16,6 +16,7 @@ extern "C" void RegisterXdgShell(wl_display* display);
 #undef LOG_TAG
 #define LOG_TAG "WL_Server"
 #include <hilog/log.h>
+#include "plugin_manager.h"
 
 // -- wl_surface 接口实现表 --
 static const struct wl_surface_interface kSurfaceImpl = {
@@ -148,10 +149,22 @@ void WaylandServer::Stop() {
 }
 
 void WaylandServer::EventLoop() {
+    int tick = 0;
     while (running_) {
         wl_event_loop* loop = wl_display_get_event_loop(display_);
-        wl_event_loop_dispatch(loop, 50); // 50ms timeout
+        int ret = wl_event_loop_dispatch(loop, 50); // 50ms timeout
+        if (ret < 0) {
+            OH_LOG_ERROR(LOG_APP, "[WL-ERR] event loop error: %{public}s (errno=%{public}d)",
+                         strerror(errno), errno);
+        }
         wl_display_flush_clients(display_);  // dispatch 可能写数据, 之后 flush
+
+        // 每 30 秒输出一次资源快照 (50ms * 600 = 30s)
+        if (++tick % 600 == 0) {
+            size_t renderers = PluginManager::GetInstance()->GetRendererCount();
+            OH_LOG_INFO(LOG_APP, "[WL-STAT] toplevels=%{public}zu surfaces=%{public}zu renderers=%{public}zu",
+                        toplevelResources_.size(), toplevelSurfaceMap_.size(), renderers);
+        }
     }
 }
 

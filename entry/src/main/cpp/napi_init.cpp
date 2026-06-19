@@ -46,6 +46,72 @@ static void CloseInheritedFds(int keep1, int keep2) {
     closedir(d);
 }
 
+// -- 进程退出状态日志 (统一 WIFSIGNALED/WIFEXITED 检测) --
+static void LogProcessExit(const char* tag, pid_t pid, int status) {
+    if (WIFSIGNALED(status)) {
+        int sig = WTERMSIG(status);
+        OH_LOG_ERROR(LOG_APP, "[%{public}s] CRASH pid=%{public}d signal=%{public}d(%{public}s) core=%{public}d",
+                     tag, pid, sig, strsignal(sig), WCOREDUMP(status) ? 1 : 0);
+    } else if (WIFEXITED(status)) {
+        OH_LOG_INFO(LOG_APP, "[%{public}s] process %{public}d exited code=%{public}d",
+                    tag, pid, WEXITSTATUS(status));
+    } else {
+        OH_LOG_WARN(LOG_APP, "[%{public}s] process %{public}d terminated status=0x%{public}x",
+                    tag, pid, status);
+    }
+}
+
+// -- stderr pipe reader (后台线程, 逐行日志) --
+// done 为 nullptr 时永不停止 (适合 wineserver 等持久进程)
+static void StartStderrLogger(int fd, const char* tag,
+                              std::shared_ptr<std::atomic<bool>> done = nullptr) {
+    std::thread([fd, tag, done]() {
+        char buf[4096];
+        std::string pending;
+        while (true) {
+            if (done && *done) break;
+            ssize_t n = read(fd, buf, sizeof(buf) - 1);
+            if (n > 0) {
+                buf[n] = 0;
+                pending.append(buf, n);
+                size_t pos;
+                while ((pos = pending.find('\n')) != std::string::npos) {
+                    std::string line = pending.substr(0, pos);
+                    if (!line.empty())
+                        OH_LOG_INFO(LOG_APP, "[%{public}s] %{public}s", tag, line.c_str());
+                    pending.erase(0, pos + 1);
+                }
+            } else {
+                if (n == 0 || (n < 0 && errno != EINTR)) break;
+            }
+        }
+        if (!pending.empty())
+            OH_LOG_INFO(LOG_APP, "[%{public}s] %{public}s", tag, pending.c_str());
+        close(fd);
+    }).detach();
+}
+
+// -- 构建 Wine 环境变量 (wineserver/wineboot/wine 共用) --
+static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
+                                              const std::string& sockName,
+                                              const std::string& libPath,
+                                              const std::string& binDir) {
+    std::string xkbDir = binDir + "/../share/X11/xkb";
+    return {
+        "XDG_RUNTIME_DIR=" + sockDir,
+        "WAYLAND_DISPLAY=" + sockName,
+        "LD_LIBRARY_PATH=" + libPath,
+        "HOME=/storage/Users/currentUser",
+        "WINEPREFIX=/data/storage/el2/base/files/.wine",
+        "BOX64_LOG=1",
+        "BOX64_NOBANNER=0",
+        "WINEDEBUG=+waylanddrv",
+        "XKB_CONFIG_ROOT=" + xkbDir,
+        "PATH=/usr/local/bin:/data/app/bin:/data/service/hnp/bin:/usr/bin:/vendor/bin",
+        "TMPDIR=/storage/Users/currentUser",
+    };
+}
+
 // -- 客户端 stdout/stderr 读取线程 --
 static void ReaderThread(int fd) {
     char buf[2048];
@@ -76,12 +142,10 @@ static void ReaderThread(int fd) {
     if (gClientPid > 0) {
         int status;
         waitpid(gClientPid, &status, 0);
-        int code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
-        OH_LOG_INFO(LOG_APP, "[wine] process %{public}d exited with code %{public}d", gClientPid, code);
+        LogProcessExit("wine", gClientPid, status);
         gClientPid = -1;
         if (gStateTsfn) {
-            char* msg = strdup("exited");
-            napi_call_threadsafe_function(gStateTsfn, msg, napi_tsfn_blocking);
+            napi_call_threadsafe_function(gStateTsfn, strdup("exited"), napi_tsfn_blocking);
         }
     }
 }
@@ -171,25 +235,11 @@ struct LaunchParams {
 
 static void LaunchThreadFunc(LaunchParams* p) {
     OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver + wineboot + wine starting in background");
-
-    // 计算 XKB 数据路径: winehuaBin = .../opt/winehua/bin → xkbDir = .../opt/winehua/share/X11/xkb
-    std::string xkbDir = p->winehuaBin + "/../share/X11/xkb";
-    OH_LOG_INFO(LOG_APP, "[Launch-Async] XKB_CONFIG_ROOT=%{public}s", xkbDir.c_str());
+    OH_LOG_INFO(LOG_APP, "[Launch-Async] XKB_CONFIG_ROOT=%{public}s",
+                (p->winehuaBin + "/../share/X11/xkb").c_str());
 
     // 组装 envp 环境变量
-    p->envStrs = {
-        "XDG_RUNTIME_DIR=" + p->sockDir,
-        "WAYLAND_DISPLAY=" + p->sockName,
-        "LD_LIBRARY_PATH=" + p->libPath,
-        "HOME=/storage/Users/currentUser",
-        "WINEPREFIX=/data/storage/el2/base/files/.wine",
-        "BOX64_LOG=1",
-        "BOX64_NOBANNER=0",
-        "WINEDEBUG=+waylanddrv",
-        "XKB_CONFIG_ROOT=" + xkbDir,
-        "PATH=/usr/local/bin:/data/app/bin:/data/service/hnp/bin:/usr/bin:/vendor/bin",
-        "TMPDIR=/storage/Users/currentUser",
-    };
+    p->envStrs = BuildWineEnv(p->sockDir, p->sockName, p->libPath, p->winehuaBin);
     for (auto& s : p->envStrs) p->envp.push_back((char*)s.c_str());
     p->envp.push_back(nullptr);
 
@@ -233,32 +283,7 @@ static void LaunchThreadFunc(LaunchParams* p) {
             OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver pid=%{public}d, waiting 1.5s...", wsPid);
             if (wsPipeOk) {
                 close(wsPipe[1]);
-                // Start background reader thread for wineserver stderr
-                int wsReadFd = wsPipe[0];
-                std::thread([wsReadFd, wsPid]() {
-                    char buf[4096];
-                    std::string pending;
-                    while (true) {
-                        ssize_t n = read(wsReadFd, buf, sizeof(buf) - 1);
-                        if (n > 0) {
-                            buf[n] = 0;
-                            pending.append(buf, n);
-                            size_t pos;
-                            while ((pos = pending.find('\n')) != std::string::npos) {
-                                std::string line = pending.substr(0, pos);
-                                if (!line.empty())
-                                    OH_LOG_INFO(LOG_APP, "[wineserver-stderr] %{public}s", line.c_str());
-                                pending.erase(0, pos + 1);
-                            }
-                        } else {
-                            if (n == 0 || (n < 0 && errno != EINTR)) break;
-                        }
-                    }
-                    if (!pending.empty())
-                        OH_LOG_INFO(LOG_APP, "[wineserver-stderr] %{public}s", pending.c_str());
-                    close(wsReadFd);
-                    OH_LOG_WARN(LOG_APP, "[Launch-Async] wineserver pid=%{public}d: stderr pipe closed (process exited?)", wsPid);
-                }).detach();
+                StartStderrLogger(wsPipe[0], "wineserver-stderr");
             }
             usleep(1500000);
         } else {
@@ -301,33 +326,8 @@ static void LaunchThreadFunc(LaunchParams* p) {
         if (bootPid > 0) {
             if (bootPipe[0] >= 0 && bootPipe[1] >= 0) {
                 close(bootPipe[1]);
-                // Read stderr in a thread while waiting for wineboot to finish.
-                // 使用 shared_ptr 避免函数返回后栈变量被释放导致 SIGSEGV.
                 auto bootDone = std::make_shared<std::atomic<bool>>(false);
-                int bootPipeRd = bootPipe[0];
-                std::thread([bootDone, bootPipeRd]() {
-                    char buf[4096];
-                    std::string pending;
-                    while (!*bootDone) {
-                        ssize_t n = read(bootPipeRd, buf, sizeof(buf) - 1);
-                        if (n > 0) {
-                            buf[n] = 0;
-                            pending.append(buf, n);
-                            size_t pos;
-                            while ((pos = pending.find('\n')) != std::string::npos) {
-                                std::string line = pending.substr(0, pos);
-                                if (!line.empty())
-                                    OH_LOG_INFO(LOG_APP, "[wineboot-stderr] %{public}s", line.c_str());
-                                pending.erase(0, pos + 1);
-                            }
-                        } else {
-                            if (n == 0 || (n < 0 && errno != EINTR)) break;
-                        }
-                    }
-                    if (!pending.empty())
-                        OH_LOG_INFO(LOG_APP, "[wineboot-stderr] %{public}s", pending.c_str());
-                    close(bootPipeRd);
-                }).detach();
+                StartStderrLogger(bootPipe[0], "wineboot-stderr", bootDone);
 
                 int bootStatus = 0;
                 for (int i = 0; i < 300; i++) {
@@ -344,14 +344,12 @@ static void LaunchThreadFunc(LaunchParams* p) {
                     kill(bootPid, SIGKILL);
                     waitpid(bootPid, &bootStatus, 0);
                 }
-                int code = WIFEXITED(bootStatus) ? WEXITSTATUS(bootStatus) : -1;
-                OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot --init done, exit=%{public}d", code);
+                LogProcessExit("wineboot", bootPid, bootStatus);
             } else {
                 // Fallback without pipe
                 int bootStatus = 0;
                 waitpid(bootPid, &bootStatus, 0);
-                int code = WIFEXITED(bootStatus) ? WEXITSTATUS(bootStatus) : -1;
-                OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot --init done (no pipe), exit=%{public}d", code);
+                LogProcessExit("wineboot", bootPid, bootStatus);
             }
         }
     }
@@ -437,20 +435,7 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
     std::string sockDir = (pos == std::string::npos) ? "/tmp" : sockStr.substr(0, pos);
     std::string sockName = (pos == std::string::npos) ? sockStr : sockStr.substr(pos + 1);
 
-    std::string xkbDir = std::string(binDir) + "/../share/X11/xkb";
-    std::vector<std::string> envStrs = {
-        "XDG_RUNTIME_DIR=" + sockDir,
-        "WAYLAND_DISPLAY=" + sockName,
-        "LD_LIBRARY_PATH=" + std::string(libPath),
-        "HOME=/storage/Users/currentUser",
-        "WINEPREFIX=/data/storage/el2/base/files/.wine",
-        "BOX64_LOG=1",
-        "BOX64_NOBANNER=0",
-        "WINEDEBUG=+waylanddrv",
-        "XKB_CONFIG_ROOT=" + xkbDir,
-        "PATH=/usr/local/bin:/data/app/bin:/data/service/hnp/bin:/usr/bin:/vendor/bin",
-        "TMPDIR=/storage/Users/currentUser",
-    };
+    std::vector<std::string> envStrs = BuildWineEnv(sockDir, sockName, libPath, binDir);
     std::vector<char*> envp;
     for (auto& s : envStrs) envp.push_back((char*)s.c_str());
     envp.push_back(nullptr);
@@ -1261,6 +1246,11 @@ static napi_value SendPointerEvent(napi_env env, napi_callback_info info) {
     napi_get_value_double(env, args[2], &px);
     napi_get_value_double(env, args[3], &py);
     napi_get_value_int32(env, args[4], &button);
+    if (action != 1) {  // 跳过 MOVE (高频), 只记录 button/enter/leave
+        OH_LOG_INFO(LOG_APP, "[PIPE] ptr tl=%{public}u a=%{public}d btn=0x%{public}x "
+                    "px=(%{public}.0f,%{public}.0f)",
+                    tl, action, button, px, py);
+    }
     InputManager::GetInstance()->SendPointerEvent(tl, action, px, py, button);
     return nullptr;
 }
@@ -1274,6 +1264,8 @@ static napi_value SendKeyEvent(napi_env env, napi_callback_info info) {
     napi_get_value_uint32(env, args[0], &tl);
     napi_get_value_int32(env, args[1], &evdevCode);
     napi_get_value_bool(env, args[2], &pressed);
+    OH_LOG_INFO(LOG_APP, "[PIPE] key tl=%{public}u evdev=%{public}d down=%{public}s",
+                tl, evdevCode, pressed ? "true" : "false");
     InputManager::GetInstance()->SendKeyEvent(tl, evdevCode, pressed);
     return nullptr;
 }
