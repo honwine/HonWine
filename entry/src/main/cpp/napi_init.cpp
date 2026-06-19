@@ -81,7 +81,7 @@ static void KillAllProcesses() {
             OH_LOG_INFO(LOG_APP, "[ProcReg] killAll pid=%{public}d name=%{public}s",
                         entry.pid, entry.exeBasename.c_str());
             *(entry.readerActive) = false;
-            kill(entry.pid, SIGTERM);
+            kill(entry.pid, SIGKILL);
             if (entry.stdoutFd >= 0) { close(entry.stdoutFd); entry.stdoutFd = -1; }
         }
     }
@@ -1395,7 +1395,7 @@ static napi_value KillProcess(napi_env env, napi_callback_info info) {
                 OH_LOG_INFO(LOG_APP, "[NAPI] killProcess found pid=%{public}d name=%{public}s",
                             pid, entry.exeBasename.c_str());
                 *(entry.readerActive) = false;
-                kill(pid, SIGTERM);
+                kill(pid, SIGKILL);
                 if (entry.stdoutFd >= 0) { close(entry.stdoutFd); entry.stdoutFd = -1; }
                 break;
             }

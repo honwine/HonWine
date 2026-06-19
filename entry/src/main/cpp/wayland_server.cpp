@@ -181,7 +181,17 @@ void WaylandServer::compositor_create_surface(wl_client* client, wl_resource* co
                                               wl_resource_get_version(compRes), id);
     sd->surface = surfRes;
     wl_resource_set_implementation(surfRes, &kSurfaceImpl, sd, [](wl_resource* r) {
-        delete static_cast<SurfaceData*>(wl_resource_get_user_data(r));
+        auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(r));
+        if (sd && sd->hasToplevel) {
+            auto* self = GetInstance();
+            {
+                std::lock_guard<std::mutex> lk(self->toplevelSurfaceMutex_);
+                self->toplevelSurfaceMap_.erase(sd->toplevelId);
+            }
+            InputManager::GetInstance()->OnSurfaceDestroyed(r);
+            self->FireToplevelEvent(sd->toplevelId, "destroyed");
+        }
+        delete sd;
     });
 }
 
