@@ -289,9 +289,17 @@ void WaylandServer::surface_destroy(wl_client*, wl_resource* r) {
             std::lock_guard<std::mutex> lk(self->toplevelSurfaceMutex_);
             self->toplevelSurfaceMap_.erase(sd->toplevelId);
         }
+        // 清理 toplevel 像素数据 + 标记 root dirty
+        self->OnToplevelDestroyed(sd->toplevelId);
         // 重置 InputManager 焦点: 防止后续 Inject*Leave 引用已销毁的 surface
         // (否则 Wine 收到 invalid object 协议错误 → 断开连接)
         InputManager::GetInstance()->OnSurfaceDestroyed(r);
+        // 如果是 desktop root 被销毁，重置 root ID，等待下一个 explorer toplevel
+        if (sd->toplevelId == self->GetDesktopRootToplevelId()) {
+            OH_LOG_INFO(LOG_APP, "[MW] desktop root toplevel #%{public}u destroyed, clearing root",
+                        sd->toplevelId);
+            self->SetDesktopRootToplevelId(0);
+        }
         self->FireToplevelEvent(sd->toplevelId, "destroyed");
     }
     wl_resource_destroy(r);
@@ -328,13 +336,22 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
         // 确定实际内容区域: 优先用 window_geometry, 否则全 buffer
         int contentW = w, contentH = h;
         int contentOffX = 0, contentOffY = 0;
+        int screenX = 0, screenY = 0;  // PAD_MODE: 虚拟桌面位置
         if (sd->hasWindowGeometry && sd->geoW > 0 && sd->geoH > 0) {
             contentW = sd->geoW;
             contentH = sd->geoH;
-            contentOffX = sd->geoX;
-            contentOffY = sd->geoY;
-            OH_LOG_INFO(LOG_APP, "[MW-GEO] using window_geometry: src=%{public}dx%{public}d geo=(%{public}d,%{public}d %{public}dx%{public}d)",
-                        w, h, contentOffX, contentOffY, contentW, contentH);
+            // PAD_MODE: geoX/geoY 可能超出 buffer 范围 → 是桌面坐标而非内容偏移
+            if (sd->geoX >= 0 && sd->geoX < w && sd->geoY >= 0 && sd->geoY < h) {
+                // 标准 Wayland: 内容偏移在 buffer 内部
+                contentOffX = sd->geoX;
+                contentOffY = sd->geoY;
+            } else {
+                // PAD_MODE: geoX/geoY 是虚拟桌面中的屏幕位置
+                screenX = sd->geoX;
+                screenY = sd->geoY;
+            }
+            OH_LOG_INFO(LOG_APP, "[MW-GEO] using window_geometry: src=%{public}dx%{public}d geo=(%{public}d,%{public}d %{public}dx%{public}d) screen=(%{public}d,%{public}d)",
+                        w, h, contentOffX, contentOffY, contentW, contentH, screenX, screenY);
         }
 
         // 复制像素时 strip stride padding, 只提取 content 区域
@@ -391,6 +408,8 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
             copyTight(self->toplevelPixels_[sd->toplevelId]);
             self->toplevelW_[sd->toplevelId] = contentW;
             self->toplevelH_[sd->toplevelId] = contentH;
+            self->toplevelX_[sd->toplevelId] = screenX;
+            self->toplevelY_[sd->toplevelId] = screenY;
             self->toplevelDirty_[sd->toplevelId] = true;
             OH_LOG_INFO(LOG_APP, "[MW-COMMIT] toplevel #%{public}u frame %{public}dx%{public}d stride=%{public}d stored=%{public}zu",
                         sd->toplevelId, contentW, contentH, stride, self->toplevelPixels_[sd->toplevelId].size());
@@ -406,6 +425,23 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
                 OH_LOG_INFO(LOG_APP, "[MW] toplevel #%{public}u size changed: %{public}dx%{public}d -> ArkTS",
                             sd->toplevelId, contentW, contentH);
                 self->FireToplevelEvent(sd->toplevelId, "resize", json);
+            }
+        }
+        // Desktop 模式: 非 root toplevel commit → 标记 root dirty
+        if (self->IsDesktopMode() && sd->hasToplevel &&
+            sd->toplevelId != self->GetDesktopRootToplevelId()) {
+            uint32_t rootId = self->GetDesktopRootToplevelId();
+            // 如果 toplevel 尺寸匹配桌面输出（>=80%），说明 explorer 重建了桌面窗口
+            // 更新 root 以使用最新帧
+            if (contentW >= self->outputW_ * 8 / 10 && contentH >= self->outputH_ * 8 / 10) {
+                OH_LOG_INFO(LOG_APP, "[MW] switching desktop root: #%{public}u -> #%{public}u (%{public}dx%{public}d)",
+                            rootId, sd->toplevelId, contentW, contentH);
+                self->SetDesktopRootToplevelId(sd->toplevelId);
+                rootId = sd->toplevelId;
+            }
+            if (rootId > 0) {
+                std::lock_guard<std::mutex> lk(self->toplevelMutex_);
+                self->toplevelDirty_[rootId] = true;
             }
         }
         // subsurface 合成: 将 popup 像素合成到父 toplevel 的 framebuffer
@@ -502,6 +538,61 @@ bool WaylandServer::TakeFrame(std::vector<uint8_t>& out, int& w, int& h) {
 
 bool WaylandServer::TakeToplevelFrame(uint32_t id, std::vector<uint8_t>& out, int& w, int& h) {
     std::lock_guard<std::mutex> lk(toplevelMutex_);
+
+    // Desktop mode: 合成所有非 root toplevel 到 root framebuffer
+    // 因为 Wine 不会在子窗口变化时重新提交桌面 surface，
+    // 所以必须手动把子窗口像素覆盖到桌面帧上。
+    if (desktopMode_ && id == desktopRootToplevelId_) {
+        auto rit = toplevelPixels_.find(id);
+        if (rit == toplevelPixels_.end()) return false;
+
+        auto dit = toplevelDirty_.find(id);
+        if (dit == toplevelDirty_.end() || !dit->second) return false;
+
+        int rootW = toplevelW_[id];
+        int rootH = toplevelH_[id];
+
+        // 从干净的 root 帧复制一份用于合成，避免污染 toplevelPixels_[root]
+        // （否则下次合成时上次写入的子窗口像素会残留）
+        std::vector<uint8_t> composited = rit->second;
+
+        for (auto& [childId, childPx] : toplevelPixels_) {
+            if (childId == id) continue;
+            int childW = toplevelW_[childId];
+            int childH = toplevelH_[childId];
+            // 跳过与 root 相同大小的 toplevel (旧的 root 重建后残留)
+            if (childW == rootW && childH == rootH) continue;
+            int posX = toplevelX_[childId];
+            int posY = toplevelY_[childId];
+            // 计算子窗口在 root framebuffer 中的可见区域
+            int dstX = (posX > 0) ? posX : 0;
+            int dstY = (posY > 0) ? posY : 0;
+            int srcX = (posX < 0) ? -posX : 0;
+            int srcY = (posY < 0) ? -posY : 0;
+            int copyW = childW - srcX;
+            int copyH = childH - srcY;
+            if (dstX + copyW > rootW) copyW = rootW - dstX;
+            if (dstY + copyH > rootH) copyH = rootH - dstY;
+            if (copyW <= 0 || copyH <= 0) continue;
+            for (int y = 0; y < copyH; y++) {
+                auto* srcRow = &childPx[(srcY + y) * childW * 4];
+                auto* dstRow = &composited[(dstY + y) * rootW * 4];
+                for (int x = 0; x < copyW; x++) {
+                    if (srcRow[(srcX + x) * 4 + 3])
+                        memcpy(&dstRow[(dstX + x) * 4], &srcRow[(srcX + x) * 4], 4);
+                }
+            }
+        }
+
+        out = std::move(composited);
+        w = rootW;
+        h = rootH;
+        toplevelDirty_[id] = false;
+        OH_LOG_INFO(LOG_APP, "[MW-TAKE] desktop root #%{public}u frame %{public}dx%{public}d px=%{public}zu",
+                    id, w, h, out.size());
+        return true;
+    }
+
     auto it = toplevelDirty_.find(id);
     if (it == toplevelDirty_.end() || !it->second) return false;
     out = toplevelPixels_[id];
@@ -530,6 +621,20 @@ void WaylandServer::UnregisterToplevelResource(uint32_t toplevelId) {
         OH_LOG_INFO(LOG_APP, "[MW] UnregisterToplevelResource id=%{public}u tl=%{public}p (Wine destroyed toplevel)",
                     toplevelId, it->second);
         toplevelResources_.erase(it);
+    }
+}
+
+void WaylandServer::OnToplevelDestroyed(uint32_t toplevelId) {
+    std::lock_guard<std::mutex> lk(toplevelMutex_);
+    toplevelPixels_.erase(toplevelId);
+    toplevelW_.erase(toplevelId);
+    toplevelH_.erase(toplevelId);
+    toplevelX_.erase(toplevelId);
+    toplevelY_.erase(toplevelId);
+    toplevelDirty_.erase(toplevelId);
+    // Desktop mode: 子窗口销毁后需要重新合成 root
+    if (IsDesktopMode() && toplevelId != desktopRootToplevelId_) {
+        if (desktopRootToplevelId_ > 0) toplevelDirty_[desktopRootToplevelId_] = true;
     }
 }
 

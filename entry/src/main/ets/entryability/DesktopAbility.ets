@@ -22,7 +22,7 @@ export default class DesktopAbility extends UIAbility {
 
   onWindowStageCreate(windowStage: window.WindowStage): void {
     hilog.info(DOMAIN, TAG, '[DWA] onWindowStageCreate tl=%{public}d', this.toplevelId);
-    windowStage.loadContent('pages/DesktopPage', (err) => {
+    windowStage.loadContent('pages/DesktopWindow', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, TAG, '[DWA] loadContent FAILED: %{public}s', JSON.stringify(err));
       } else {

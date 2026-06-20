@@ -3,6 +3,6 @@
     "pages/Index",
     "pages/TerminalPage",
     "pages/WineWindow",
-    "pages/DesktopPage"
+    "pages/DesktopWindow"
   ]
 }

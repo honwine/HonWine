@@ -152,10 +152,14 @@ void EglRenderer::RenderLoop() {
 
     while (running_) {
         bool haveFrame = false;
-        if (toplevelId_ != 0) {
-            haveFrame = WaylandServer::GetInstance()->TakeToplevelFrame(toplevelId_, px, fw, fh);
+        uint32_t useToplevel = toplevelId_;
+        WaylandServer* ws = WaylandServer::GetInstance();
+        // Desktop mode: root toplevel may be recreated, always use current ID
+        if (ws->IsDesktopMode()) useToplevel = ws->GetDesktopRootToplevelId();
+        if (useToplevel != 0) {
+            haveFrame = ws->TakeToplevelFrame(useToplevel, px, fw, fh);
         } else {
-            haveFrame = WaylandServer::GetInstance()->TakeFrame(px, fw, fh);
+            haveFrame = ws->TakeFrame(px, fw, fh);
         }
 
         if (haveFrame && fw > 0 && fh > 0) {
@@ -164,7 +168,7 @@ void EglRenderer::RenderLoop() {
             frameH_ = fh;
             if (!firstFrameLogged) {
                 OH_LOG_INFO(LOG_APP, "[MW-RNDR] tl=%{public}u  FIRST FRAME %{public}dx%{public}d px=%{public}zu",
-                            toplevelId_, fw, fh, px.size());
+                            useToplevel, fw, fh, px.size());
                 firstFrameLogged = true;
             }
             glBindTexture(GL_TEXTURE_2D, texture_);
@@ -221,7 +225,7 @@ void EglRenderer::RenderLoop() {
             float sA = (float)width_ / height_;
             float fA = fw > 0 && fh > 0 ? (float)fw / fh : 0;
             OH_LOG_INFO(LOG_APP, "[MW-RNDR] diag#%{public}d tl=%{public}u surface=%{public}dx%{public}d(asp=%{public}.2f) frame=%{public}dx%{public}d(asp=%{public}.2f) vp=%{public}dx%{public}d+%{public}d,%{public}d bar=(L%{public}d R%{public}d T%{public}d B%{public}d)",
-                        loopCount, toplevelId_,
+                        loopCount, useToplevel,
                         width_, height_, sA, fw, fh, fA,
                         vpW_, vpH_, vpX_, vpY_,
                         barLeft, barRight, barTop, barBot);
@@ -232,7 +236,7 @@ void EglRenderer::RenderLoop() {
             lastLoggedW_ = width_;
             lastLoggedH_ = height_;
             OH_LOG_INFO(LOG_APP, "[MW-RESIZE] tl=%{public}u surface=%{public}dx%{public}d frame=%{public}dx%{public}d",
-                        toplevelId_, width_, height_, fw, fh);
+                        useToplevel, width_, height_, fw, fh);
         }
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);

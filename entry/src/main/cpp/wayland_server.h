@@ -45,6 +45,8 @@ public:
     // toplevel resource 映射 (用于 SendToplevelClose -> xdg_toplevel_send_close)
     void RegisterToplevelResource(uint32_t toplevelId, wl_resource* tl);
     void UnregisterToplevelResource(uint32_t toplevelId);
+    // 清理 toplevel 像素数据 + 标记 root dirty (desktop mode)
+    void OnToplevelDestroyed(uint32_t toplevelId);
     void SendToplevelClose(uint32_t toplevelId);
     // 鸿蒙侧恢复最小化窗口时调用: 清除 minimized 标志 + 发 configure 通知 Wine
     void NotifyWindowRestored(uint32_t toplevelId);
@@ -128,6 +130,7 @@ private:
     std::mutex toplevelMutex_;
     std::unordered_map<uint32_t, std::vector<uint8_t>> toplevelPixels_;
     std::unordered_map<uint32_t, int> toplevelW_, toplevelH_;
+    std::unordered_map<uint32_t, int> toplevelX_, toplevelY_;  // desktop compositing position
     std::unordered_map<uint32_t, bool> toplevelDirty_;
     std::unordered_map<uint32_t, int> toplevelLastReportedW_, toplevelLastReportedH_;
 

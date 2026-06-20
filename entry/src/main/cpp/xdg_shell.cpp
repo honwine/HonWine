@@ -43,7 +43,7 @@ static void tl_set_app_id(wl_client*, wl_resource* tlRes, const char* appId) {
     auto* td = static_cast<ToplevelData*>(wl_resource_get_user_data(tlRes));
     if (td && appId && strstr(appId, "explorer")) {
         auto* server = WaylandServer::GetInstance();
-        if (server->IsDesktopMode()) {
+        if (server->IsDesktopMode() && server->GetDesktopRootToplevelId() == 0) {
             server->SetDesktopRootToplevelId(td->toplevelId);
             server->FireToplevelEvent(td->toplevelId, "desktop_root", "{}");
             OH_LOG_INFO(LOG_APP, "[XDG] desktop root toplevel #%{public}u", td->toplevelId);
@@ -171,6 +171,7 @@ static void xs_destroy(wl_client*, wl_resource* r) {
     if (d && d->wlSurface) {
         auto* sd = static_cast<SurfaceData*>(wl_resource_get_user_data(d->wlSurface));
         if (sd && sd->hasToplevel) {
+            WaylandServer::GetInstance()->OnToplevelDestroyed(sd->toplevelId);
             WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "destroyed");
         }
     }
