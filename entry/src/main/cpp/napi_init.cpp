@@ -438,9 +438,27 @@ static void LaunchThreadFunc(LaunchParams* p) {
         auto ret = OH_Ability_StartNativeChildProcess(
             "libwine_child.so:Main", childArgs, options, &childPid);
 
-        if (ret == NCP_NO_ERROR)
+        if (ret == NCP_NO_ERROR) {
             OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot done, pid=%{public}d", childPid);
-        else
+
+            // 启动 explorer desktop shell，尺寸匹配输出
+            usleep(500000);
+            auto* ws = WaylandServer::GetInstance();
+            int dw = ws->outputW_ > 0 ? ws->outputW_ : 1280;
+            int dh = ws->outputH_ > 0 ? ws->outputH_ : 720;
+            char desktopArg[128];
+            snprintf(desktopArg, sizeof(desktopArg), "/desktop=shell,%dx%d", dw, dh);
+            std::string exEntry = p->winehuaBin + "|wine|explorer|" + desktopArg;
+            NativeChildProcess_Args exArgs = {};
+            exArgs.entryParams = const_cast<char*>(exEntry.c_str());
+            NativeChildProcess_Options exOpts = {};
+            exOpts.isolationMode = NCP_ISOLATION_MODE_NORMAL;
+            int32_t exPid = -1;
+            auto exRet = OH_Ability_StartNativeChildProcess(
+                "libwine_child.so:Main", exArgs, exOpts, &exPid);
+            OH_LOG_INFO(LOG_APP, "[Launch-Async] explorer desktop pid=%{public}d ret=%{public}d",
+                        exPid, (int)exRet);
+        } else
             OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot FAILED ret=%{public}d", (int)ret);
     }
 #else
@@ -1435,6 +1453,26 @@ static napi_value SetDisplayScale(napi_env env, napi_callback_info info) {
     return nullptr;
 }
 
+static napi_value SetDesktopMode(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    if (argc >= 1) {
+        bool on;
+        napi_get_value_bool(env, args[0], &on);
+        WaylandServer::GetInstance()->SetDesktopMode(on);
+        OH_LOG_INFO(LOG_APP, "[MW-NAPI] setDesktopMode = %{public}s", on ? "true" : "false");
+    }
+    return nullptr;
+}
+
+static napi_value GetDesktopRootId(napi_env env, napi_callback_info) {
+    uint32_t id = WaylandServer::GetInstance()->GetDesktopRootToplevelId();
+    napi_value r;
+    napi_create_uint32(env, id, &r);
+    return r;
+}
+
 // -- Input forwarding NAPI (unified InputManager path) --
 static napi_value SendPointerEvent(napi_env env, napi_callback_info info) {
     size_t argc = 5;
@@ -1605,7 +1643,9 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"destroyRenderer", nullptr, DestroyRenderer, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"runMmapTests",  nullptr, RunMmapTests,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setOutputSize",   nullptr, SetOutputSize,   nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"setDisplayScale", nullptr, SetDisplayScale, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setDisplayScale",  nullptr, SetDisplayScale,  nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setDesktopMode",   nullptr, SetDesktopMode,   nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"getDesktopRootId", nullptr, GetDesktopRootId, nullptr, nullptr, nullptr, napi_default, nullptr},
         // ArkTS input forwarding (unified InputManager path)
         {"sendPointerEvent", nullptr, SendPointerEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"sendKeyEvent",     nullptr, SendKeyEvent,     nullptr, nullptr, nullptr, napi_default, nullptr},

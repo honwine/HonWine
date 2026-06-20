@@ -52,6 +52,13 @@ public:
     void NotifyToplevelResize(uint32_t toplevelId, int32_t w, int32_t h);
     // 设置输出尺寸 (替换硬编码 1280x720)
     void SetOutputSize(int32_t w, int32_t h) { outputW_ = w; outputH_ = h; }
+    int32_t outputW_ = 1280;
+    int32_t outputH_ = 720;
+    // Desktop 合成模式 (Tablet): 全部 toplevel 合成到一个 root framebuffer
+    void SetDesktopMode(bool on) { desktopMode_ = on; }
+    bool IsDesktopMode() const { return desktopMode_; }
+    void SetDesktopRootToplevelId(uint32_t id) { desktopRootToplevelId_ = id; }
+    uint32_t GetDesktopRootToplevelId() const { return desktopRootToplevelId_; }
 
     // -- wayland 协议实现 --
     static void compositor_bind(wl_client*, void*, uint32_t, uint32_t);
@@ -135,9 +142,9 @@ private:
     std::unordered_map<uint32_t, wl_resource*> toplevelSurfaceMap_;
     std::mutex toplevelSurfaceMutex_;
 
-    // 输出尺寸 (ArkTS 初始化时通过 SetOutputSize 设置)
-    int32_t outputW_ = 1280;
-    int32_t outputH_ = 720;
+    // Desktop 合成模式
+    bool desktopMode_ = false;
+    uint32_t desktopRootToplevelId_ = 0;
 };
 
 // wl_surface 的每个实例携带的数据

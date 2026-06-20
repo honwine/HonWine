@@ -1,6 +1,7 @@
 import { common, Want } from '@kit.AbilityKit';
 import { window, display } from '@kit.ArkUI';
 import { hilog } from '@kit.PerformanceAnalysisKit';
+import { deviceInfo } from '@kit.BasicServicesKit';
 import testNapi from 'libentry.so';
 
 const DOMAIN = 0x0000;
@@ -23,6 +24,11 @@ export class WineWindowManager {
   private decorBorderOffset: number = 19;  // 56 - 37
   // 校准计数: 前几轮不做 EMA 平滑, 快速收敛
   private barCalibrationCount: number = 0;
+
+  // -- Desktop 模式 (Tablet) --
+  private isDesktopMode: boolean = false;
+  private desktopRootId: number = 0;
+  private desktopAbilityRunning: boolean = false;
 
   // toplevelId -> UIAbilityContext (用于 terminateSelf)
   private abilityContexts: Map<number, common.UIAbilityContext> = new Map();
@@ -79,6 +85,15 @@ export class WineWindowManager {
 
     hilog.info(DOMAIN, TAG, '[MW] init: mainWindow=%{public}s ctx=%{public}s',
       this.mainWindow ? 'ok' : 'NULL', this.uiAbilityContext ? 'ok' : 'NULL');
+
+    // Tablet 检测: 桌面合成模式
+    this.isDesktopMode = deviceInfo.deviceType === 'tablet';
+    if (this.isDesktopMode) {
+      testNapi.setDesktopMode(true);
+      hilog.info(DOMAIN, TAG, '[MW] Tablet → DESKTOP MODE (single XComponent)');
+    } else {
+      hilog.info(DOMAIN, TAG, '[MW] deviceType=%{public}s → MANAGED MODE', deviceInfo.deviceType);
+    }
 
     // 获取设备显示密度
     try {
@@ -230,14 +245,26 @@ export class WineWindowManager {
 
     switch (event) {
       case 'created':
-        hilog.info(DOMAIN, TAG, '[MW] -> startWineWindowAbility(#%{public}d)', id);
-        this.startWineWindowAbility(id, data);
+        if (this.isDesktopMode) {
+          hilog.info(DOMAIN, TAG, '[MW] Desktop mode: toplevel #%{public}d created, skipping Ability', id);
+        } else {
+          hilog.info(DOMAIN, TAG, '[MW] -> startWineWindowAbility(#%{public}d)', id);
+          this.startWineWindowAbility(id, data);
+        }
+        break;
+      case 'desktop_root':
+        // Tablet: C++ 识别到 explorer desktop → 打开 DesktopAbility
+        hilog.info(DOMAIN, TAG, '[MW] desktop_root toplevel #%{public}d → start DesktopAbility', id);
+        this.desktopRootId = id;
+        this.startDesktopAbility(id);
         break;
       case 'destroyed':
         hilog.info(DOMAIN, TAG, '[MW] -> onToplevelDestroyed(#%{public}d)', id);
         this.onToplevelDestroyed(id);
         break;
       case 'surface':
+        // Desktop 模式: 非 root toplevel 事件跳过
+        if (this.isDesktopMode && id !== this.desktopRootId) return;
         // C++ 回报 XComponent surface 的物理像素尺寸, 用于动态校准标题栏高度
         try {
           const obj: Record<string, string | number> = JSON.parse(data) as Record<string, string | number>;
@@ -290,6 +317,7 @@ export class WineWindowManager {
         break;
       case 'title':
       case 'resize':
+        if (this.isDesktopMode && id !== this.desktopRootId) return;
         if (this.windows.has(id)) {
           hilog.info(DOMAIN, TAG, '[MW] -> applyEvent directly #%{public}d %{public}s', id, event);
           this.applyEvent(id, event, data);
@@ -306,6 +334,7 @@ export class WineWindowManager {
       case 'maximized':
       case 'unmaximized':
       case 'limits':
+        if (this.isDesktopMode && id !== this.desktopRootId) return;
         if (this.windows.has(id)) {
           this.applyEvent(id, event, data);
         } else {
@@ -480,16 +509,28 @@ export class WineWindowManager {
     hilog.info(DOMAIN, TAG, '[MW] onToplevelDestroyed #%{public}d', id);
     this.destroyed.add(id);
 
-    // 如果 ability 侧已经清理过 (用户先关窗), 跳过
+    // Desktop 模式: root 销毁 → 关闭 DesktopAbility
+    if (this.isDesktopMode && id === this.desktopRootId) {
+      hilog.info(DOMAIN, TAG, '[MW] -> destroyToplevel #%{public}d (desktop root)', id);
+      testNapi.destroyToplevel(id);
+      this.desktopRootId = 0;
+      this.desktopAbilityRunning = false;
+      this.unregisterAbility(id);
+      return;
+    }
+    // Desktop 模式: 非 root toplevel 销毁, C++ 自动停止合成
+    if (this.isDesktopMode) {
+      this.unregisterAbility(id);
+      return;
+    }
+
+    // PC: 原逻辑
     if (!this.abilityContexts.has(id) && !this.pendingStarts.has(id)) {
       hilog.info(DOMAIN, TAG, '[MW] onToplevelDestroyed #%{public}d: already cleaned up by ability, skip', id);
       return;
     }
-
-    // 清理 C++ renderer
     hilog.info(DOMAIN, TAG, '[MW] -> destroyToplevel #%{public}d', id);
     testNapi.destroyToplevel(id);
-
     const ctx = this.abilityContexts.get(id);
     if (ctx) {
       hilog.info(DOMAIN, TAG, '[MW] -> terminateSelf #%{public}d', id);
@@ -501,4 +542,29 @@ export class WineWindowManager {
     this.unregisterAbility(id);
     hilog.info(DOMAIN, TAG, '[MW] onToplevelDestroyed #%{public}d done', id);
   }
+
+  // Desktop 模式: 打开 DesktopAbility
+  private startDesktopAbility(rootId: number): void {
+    if (this.desktopAbilityRunning) {
+      hilog.info(DOMAIN, TAG, '[MW] DesktopAbility already running, skip');
+      return;
+    }
+    this.desktopAbilityRunning = true;
+    try {
+      const want: Want = {
+        bundleName: 'app.hackeris.winehua',
+        abilityName: 'DesktopAbility',
+        parameters: { toplevelId: rootId }
+      };
+      this.uiAbilityContext!.startAbility(want).catch((err: Error) => {
+        hilog.error(DOMAIN, TAG, '[MW] startAbility(DesktopAbility) failed: %{public}s',
+          JSON.stringify(err));
+      });
+      hilog.info(DOMAIN, TAG, '[MW] startAbility(DesktopAbility) #%{public}d OK', rootId);
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, '[MW] startDesktopAbility error: %{public}s', JSON.stringify(e));
+    }
+  }
+
+  getDesktopRootId(): number { return this.desktopRootId; }
 }

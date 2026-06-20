@@ -38,8 +38,17 @@ static void tl_set_title(wl_client*, wl_resource* tlRes, const char* title) {
     snprintf(json, sizeof(json), "{\"title\":\"%s\"}", sd->title.c_str());
     WaylandServer::GetInstance()->FireToplevelEvent(sd->toplevelId, "title", json);
 }
-static void tl_set_app_id(wl_client*, wl_resource*, const char* appId) {
+static void tl_set_app_id(wl_client*, wl_resource* tlRes, const char* appId) {
     OH_LOG_INFO(LOG_APP, "[XDG] app_id=%{public}s", appId ? appId : "(null)");
+    auto* td = static_cast<ToplevelData*>(wl_resource_get_user_data(tlRes));
+    if (td && appId && strstr(appId, "explorer")) {
+        auto* server = WaylandServer::GetInstance();
+        if (server->IsDesktopMode()) {
+            server->SetDesktopRootToplevelId(td->toplevelId);
+            server->FireToplevelEvent(td->toplevelId, "desktop_root", "{}");
+            OH_LOG_INFO(LOG_APP, "[XDG] desktop root toplevel #%{public}u", td->toplevelId);
+        }
+    }
 }
 static void tl_show_window_menu(wl_client*, wl_resource*, wl_resource*, uint32_t, int32_t, int32_t) {}
 static void tl_move(wl_client*, wl_resource*, wl_resource*, uint32_t) {}
