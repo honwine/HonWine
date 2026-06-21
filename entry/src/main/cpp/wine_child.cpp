@@ -29,7 +29,6 @@ static void* stderr_reader_thread(void* arg) {
     auto* ctx = (stderr_ctx*)arg;
     char buf[4096];
     ssize_t n;
-    OH_LOG_INFO(LOG_APP, "[WineChild-stderr] reader thread started, fd=%{public}d", ctx->fd);
     while ((n = read(ctx->fd, buf, sizeof(buf) - 1)) > 0) {
         // 写文件
         if (ctx->fileFd >= 0) write(ctx->fileFd, buf, n);
@@ -62,7 +61,6 @@ static void setup_wine_env(const char* binDir)
            "/data/app/bin:/usr/local/lib:/system/lib64/module:/system/lib64", 1);
     // Box64 用它自己的搜索路径加载 x86_64 .so
     setenv("BOX64_LD_LIBRARY_PATH", libDir.c_str(), 1);
-    setenv("BOX64_EMULATED_LIBS", "libc.so", 1);
 #else
     // x86_64: 系统 linker 直接加载 x86_64 OHOS .so
     setenv("LD_LIBRARY_PATH", libDir.c_str(), 1);
@@ -89,14 +87,22 @@ static void setup_wine_env(const char* binDir)
     setenv("WINEDLLDIR0", (std::string(binDir) + "/x86_64-windows").c_str(), 1);
     setenv("WINEDLLDIR1", binDir, 1);
     setenv("WINEDLLPATH", (std::string(binDir) + "/x86_64-windows:" + binDir).c_str(), 1);
-    setenv("BOX64_LOG", "3", 1);
-    setenv("BOX64_NOBANNER", "0", 1);
+    // Box64 日志: 0=关闭 (3=DEBUG 会将每个 syscall/函数调用写入 stderr,
+    // 单次 wineboot --init 产生 30 万行日志, I/O 拖慢初始化 10 倍以上)
+    setenv("BOX64_LOG", "0", 1);
+    // 隐藏 Box64 版本横幅
+    setenv("BOX64_NOBANNER", "1", 1);
+    // 崩溃时仍打印 SIGSEGV 地址/寄存器/调用栈
     setenv("BOX64_SHOWSEGV", "1", 1);
+#ifdef __aarch64__
+    // 标记 Box64 in-process 模式，供 x86_64 wine 代码 (process.c) 运行时判断
+    setenv("WINE_BOX64_INPROCESS", "1", 1);
+#endif
     setenv("PATH", (std::string("/usr/local/bin:/data/app/bin:/usr/bin:/vendor/bin:")
                     + binDir + "/x86_64-windows:" + binDir).c_str(), 1);
     setenv("TMPDIR", "/data/storage/el2/base/cache", 1);
     setenv("XDG_RUNTIME_DIR", "/data/storage/el2/base/files/.wine", 1);
-    setenv("WINEDEBUG", "+all", 1);
+    setenv("WINEDEBUG", "-all", 1);  // -all=关闭全部调试频道
 }
 
 extern "C" void Main(NativeChildProcess_Args args)
@@ -244,7 +250,7 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
 
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step1: setting env...");
     setenv("WINEPREFIX", "/data/storage/el2/base/files/.wine", 1);
-    setenv("WINEDEBUG", "+server", 1);  // wineserver 自身 debug 输出
+    setenv("WINEDEBUG", "-all", 1);
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step2: mkdir...");
     mkdir("/data/storage/el2/base/files/.wine", 0755);
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step3: chdir(%{public}s)...", binDir);
@@ -275,6 +281,50 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
     }
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step4: argv argc=%d argv[0]=%s", argc2, argv2[0]);
 
+#ifdef __aarch64__
+    // ARM64 Pad: dlopen box64.so → Box64 模拟 x86_64 wineserver ELF
+    OH_LOG_INFO(LOG_APP, "[WineChild] ws step5: dlopen box64.so (ARM64 Box64 path)...");
+    void* box64_lib = dlopen("box64.so", RTLD_NOW);
+    if (!box64_lib) {
+        OH_LOG_ERROR(LOG_APP, "[WineChild] dlopen(box64.so) failed: %{public}s", dlerror());
+        free(buf);
+        return;
+    }
+    auto* box64_main = (int (*)(int, const char**, char**))dlsym(box64_lib, "box64_hmos_main");
+    if (!box64_main) {
+        OH_LOG_ERROR(LOG_APP, "[WineChild] dlsym(box64_hmos_main) failed: %{public}s", dlerror());
+        dlclose(box64_lib);
+        free(buf);
+        return;
+    }
+
+    // Box64 env for wineserver (x86_64 wineserver ELF inside Box64).
+    // BOX64_LOG=0: 禁止每个 syscall 的日志 (3=DEBUG 会产生海量 I/O)
+    std::string libDir = std::string(binDir) + "/x86_64-unix";
+    setenv("BOX64_LD_LIBRARY_PATH", libDir.c_str(), 1);
+    setenv("BOX64_LOG", "0", 1);
+    setenv("BOX64_NOBANNER", "1", 1);
+    setenv("BOX64_SHOWSEGV", "1", 1);
+
+    // Build argv: ["box64", "/path/to/wineserver", "wineserver", "-f", "-p"]
+    std::string wsPath = std::string(binDir) + "/wineserver";
+    int box64_argc = argc2 + 2;
+    const char** box64_argv = new const char*[box64_argc + 1];
+    box64_argv[0] = "box64";
+    box64_argv[1] = wsPath.c_str();
+    for (int i = 0; i < argc2; i++)
+        box64_argv[i + 2] = argv2[i];
+    box64_argv[box64_argc] = nullptr;
+
+    OH_LOG_INFO(LOG_APP, "[WineChild] ws step6: calling box64_hmos_main argc=%d ws=%s",
+                box64_argc, wsPath.c_str());
+    int wsRc = box64_main(box64_argc, box64_argv, environ);
+    OH_LOG_INFO(LOG_APP, "[WineChild] ws step7: box64_hmos_main returned rc=%d", wsRc);
+
+    delete[] box64_argv;
+    dlclose(box64_lib);
+#else
+    // x86_64 Pad: dlopen libwineserver.so (原生)
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step5: dlopen libwineserver.so...");
     void* h = dlopen("libwineserver.so", RTLD_NOW);
     if (!h) {
@@ -298,8 +348,9 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
                 wsRc, errno);
     // ws_main 不应返回，若返回则等一阵再退出方便抓日志
     for (int i = 0; i < 30; i++) sleep(1);
-    OH_LOG_INFO(LOG_APP, "[WineChild] ws step9: wineserver process exiting");
     dlclose(h);
+#endif
+    OH_LOG_INFO(LOG_APP, "[WineChild] ws step9: wineserver process exiting");
     free(buf);
 }
 

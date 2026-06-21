@@ -30,10 +30,7 @@ if [ "$DEVICE_TYPE" = "pad" ]; then
         -DCMAKE_BUILD_TYPE=Release \
         -DARM_DYNAREC=ON \
         -DBOX64_HMOS_INPROCESS=ON \
-        -DANDROID=ON \
-        -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-        -DNOGIT=ON \
-        -DCMAKE_C_FLAGS="-include $BOX64_SRC/src/include/hmos_compat.h"
+        -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     ninja box64_hmos_core
     cp "$BUILD_DIR/box64_build/box64.so" "$NATIVE_LIBS/"
     log "Box64 → $NATIVE_LIBS/box64.so"

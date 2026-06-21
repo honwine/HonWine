@@ -170,9 +170,14 @@ static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
         "WINEDLLDIR0=" + binDir + "/x86_64-windows", // PE DLL 目录
         "WINEDLLDIR1=" + binDir,                      // PE EXE 目录
         "WINEDLLPATH=" + binDir + "/x86_64-windows:" + binDir, // PE DLL + EXE
-        "BOX64_LOG=1",
-        "BOX64_NOBANNER=0",
-        "WINEDEBUG=+wineboot,+module",
+        // Box64 日志级别: 0=无 (3=DEBUG 会产生 300K+ 行 stderr, 拖慢初始化)
+        "BOX64_LOG=0",
+        // 隐藏 Box64 版本横幅
+        "BOX64_NOBANNER=1",
+        // 保留 SIGSEGV 诊断 (崩溃时仍会打印寄存器/调用栈)
+        "BOX64_SHOWSEGV=1",
+        // Wine 调试通道: -all=关闭全部 (+wineboot,+module 等会产生大量 trace)
+        "WINEDEBUG=-all",
         "WINE_MONO=never",  // 跳过 Mono 安装 (OHOS 无网络, 会卡住)
         "XKB_CONFIG_ROOT=" + xkbDir,
         "PATH=/usr/local/bin:/data/app/bin:/data/service/hnp/bin:/usr/bin:/vendor/bin:" + binDir + "/x86_64-windows:" + binDir,
@@ -434,8 +439,13 @@ static void LaunchThreadFunc(LaunchParams* p) {
     {
         OH_LOG_INFO(LOG_APP, "[Launch-Async] running wineboot --init via appspawn...");
 
-        // entryParams: "binDir|wine|wineboot|--init"
+#ifdef __aarch64__
+        // ARM64 Box64: argv[0]=winePath (Box64 提供), argv[1]=wineboot
+        std::string entryParams = p->winehuaBin + "|wineboot|--init";
+#else
+        // x86_64: argv[0]=wine, argv[1]=wineboot
         std::string entryParams = p->winehuaBin + "|wine|wineboot|--init";
+#endif
 
         NativeChildProcess_Args childArgs = {};
         childArgs.entryParams = const_cast<char*>(entryParams.c_str());
@@ -458,7 +468,11 @@ static void LaunchThreadFunc(LaunchParams* p) {
             int dh = ws->outputH_ > 0 ? ws->outputH_ : 720;
             char desktopArg[128];
             snprintf(desktopArg, sizeof(desktopArg), "/desktop=shell,%dx%d", dw, dh);
+#ifdef __aarch64__
+            std::string exEntry = p->winehuaBin + "|explorer|" + desktopArg;
+#else
             std::string exEntry = p->winehuaBin + "|wine|explorer|" + desktopArg;
+#endif
             NativeChildProcess_Args exArgs = {};
             exArgs.entryParams = const_cast<char*>(exEntry.c_str());
             NativeChildProcess_Options exOpts = {};
@@ -586,7 +600,11 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
 #ifdef PAD_MODE
     // Pad: 通过 Process Broker + StartNativeChildProcess 创建子进程
     {
+#ifdef __aarch64__
+        std::string entryParams = std::string(binDir) + "|" + exePath;
+#else
         std::string entryParams = std::string(binDir) + "|wine|" + exePath;
+#endif
         OH_LOG_INFO(LOG_APP, "[Wine] runWineExe via broker: %{public}s", entryParams.c_str());
 
         int broker_fd = socket(AF_UNIX, SOCK_STREAM, 0);
