@@ -577,10 +577,8 @@ bool WaylandServer::TakeToplevelFrame(uint32_t id, std::vector<uint8_t>& out, in
             for (int y = 0; y < copyH; y++) {
                 auto* srcRow = &childPx[(srcY + y) * childW * 4];
                 auto* dstRow = &composited[(dstY + y) * rootW * 4];
-                for (int x = 0; x < copyW; x++) {
-                    if (srcRow[(srcX + x) * 4 + 3])
-                        memcpy(&dstRow[(dstX + x) * 4], &srcRow[(srcX + x) * 4], 4);
-                }
+                // toplevel 窗口使用 XRGB8888 (alpha 字节=0)，不加 alpha 过滤
+                memcpy(&dstRow[dstX * 4], &srcRow[srcX * 4], copyW * 4);
             }
         }
 
