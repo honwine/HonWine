@@ -60,6 +60,12 @@ bash build.sh pad x86_64                 # x86_64 Pad
 bash build.sh pad-hap arm64
 ```
 
+## 讨论交流
+
+WeChat 二维码
+
+<img src="docs/images/wechat_qrcode.png" width="300">
+
 ## 目录结构
 
 ```
