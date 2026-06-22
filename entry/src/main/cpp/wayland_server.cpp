@@ -749,9 +749,11 @@ void WaylandServer::SendToplevelClose(uint32_t toplevelId) {
 
 uint32_t WaylandServer::FindToplevelAt(int x, int y) {
     std::lock_guard<std::mutex> lk(toplevelMutex_);
-    uint32_t bestId = desktopRootToplevelId_;
-    // 遍历所有子 toplevel, 找包含 (x,y) 且 ID 最大的 (z-order: 越晚创建越在上)
-    for (auto& [id, w] : toplevelW_) {
+    // 从 Z-order 顶层向底层遍历, 返回第一个命中 (即最顶层窗口)
+    // 注意: 不能用 toplevel ID 大小代替 Z-order,
+    // 窗口被点击 raise 后 ID 不变但 Z-order 变了
+    for (auto it = toplevelZOrder_.rbegin(); it != toplevelZOrder_.rend(); ++it) {
+        uint32_t id = *it;
         if (id == desktopRootToplevelId_) continue;
         if (toplevelPixels_.find(id) == toplevelPixels_.end()) continue;
         int tx = toplevelX_[id];
@@ -759,10 +761,10 @@ uint32_t WaylandServer::FindToplevelAt(int x, int y) {
         int tw = toplevelW_[id];
         int th = toplevelH_[id];
         if (x >= tx && x < tx + tw && y >= ty && y < ty + th) {
-            if (id > bestId) bestId = id;
+            return id;
         }
     }
-    return bestId;
+    return desktopRootToplevelId_;
 }
 
 void WaylandServer::NotifyWindowRestored(uint32_t toplevelId) {
