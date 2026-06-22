@@ -172,10 +172,15 @@ static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
         "WINEDLLPATH=" + binDir + "/x86_64-windows:" + binDir, // PE DLL + EXE
         // Box64 日志级别: 0=无 (3=DEBUG 会产生 300K+ 行 stderr, 拖慢初始化)
         "BOX64_LOG=0",
-        // 隐藏 Box64 版本横幅
         "BOX64_NOBANNER=1",
-        // 保留 SIGSEGV 诊断 (崩溃时仍会打印寄存器/调用栈)
         "BOX64_SHOWSEGV=1",
+        // Box64 DYNAREC 性能调优 (对标 Winlator Performance 预设)
+        "BOX64_DYNAREC_SAFEFLAGS=0",
+        "BOX64_DYNAREC_BIGBLOCK=3",
+        "BOX64_DYNAREC_CALLRET=2",
+        "BOX64_DYNAREC_FORWARD=1024",
+        "BOX64_DYNAREC_WEAKBARRIER=2",
+        "BOX64_AVX=0",
         // Wine 调试通道: -all=关闭全部 (+wineboot,+module 等会产生大量 trace)
         "WINEDEBUG=-all",
         "WINE_MONO=never",  // 跳过 Mono 安装 (OHOS 无网络, 会卡住)
@@ -404,7 +409,6 @@ static void LaunchThreadFunc(LaunchParams* p) {
     // PC: fork + execve
     {
         std::vector<std::string> wsEnvStrs = p->envStrs;
-        wsEnvStrs.push_back("BOX64_DYNAREC=0");
         std::vector<char*> wsEnvp;
         for (auto& s : wsEnvStrs) wsEnvp.push_back((char*)s.c_str());
         wsEnvp.push_back(nullptr);
