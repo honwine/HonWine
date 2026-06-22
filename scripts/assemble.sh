@@ -76,6 +76,31 @@ assemble_pad() {
         # box64.so 由 build_box64.sh 放入 NATIVE_LIBS
         log "  → Wine x86_64 .so → rawfile zip"
 
+        # ARM64 原生库 → libs/arm64-v8a/ (Box64 dlopen bridge libraries)
+        # Box64 模拟 x86_64 时需要加载 ARM64 原生的 freetype/xkbcommon 等,
+        # 系统 linker 搜索 libs/arm64-v8a/
+        local aarch64_lib="$SYSROOT_EXT/usr/lib/$NATIVE_TARGET"
+        _pick_arm64_native() {
+            local soname="$1" linker="${2:-}"
+            if [ -f "$aarch64_lib/$soname" ]; then
+                cp "$aarch64_lib/$soname" "$NATIVE_LIBS/$soname"
+            else
+                warn "ARM64 原生库 $soname 未找到, 跳过"
+                return 0
+            fi
+            if [ -n "$linker" ] && [ ! -f "$NATIVE_LIBS/$linker" ]; then
+                cp "$aarch64_lib/$soname" "$NATIVE_LIBS/$linker"  # HAP 不支持 symlink, 实体复制
+            fi
+        }
+        # Box64 native bridge libs: soname 文件 + linker 名拷贝
+        _pick_arm64_native "libfreetype.so.6"   "libfreetype.so"
+        _pick_arm64_native "libxkbcommon.so.0"   "libxkbcommon.so"
+        _pick_arm64_native "libxkbregistry.so.0" "libxkbregistry.so"
+        _pick_arm64_native "libxml2.so.2"        "libxml2.so"
+        _pick_arm64_native "libwayland-client.so.0" "libwayland-client.so"
+        _pick_arm64_native "libwayland-server.so.0" "libwayland-server.so"
+        _pick_arm64_native "libffi.so.8"         "libffi.so"
+
         # ntdll.so → rawfile
         cp "$WINE_SRC/build-ohos/dlls/ntdll/ntdll.so" "$wine_data/bin/"
 
@@ -275,7 +300,27 @@ for exe in "$WINE_SRC/build-native/programs/"*/x86_64-windows/*.exe; do
 done
 log "  *.exe stubs: $(ls "$BIN"/*.exe 2>/dev/null | wc -l) files"
 
-# ---- libc + 交叉编译依赖 + NLS + wine.inf + fonts ----
+# ---- ARM64 原生桥接库 (PC/HNP) + libc + 交叉编译依赖 + NLS + wine.inf + fonts ----
+# ARM64 native bridge libs for Box64 in HNP package
+if [ "$NATIVE_ARCH" = "arm64-v8a" ]; then
+    local aarch64_lib="$SYSROOT_EXT/usr/lib/$NATIVE_TARGET"
+    mkdir -p "$HNP_LAYOUT/lib/arm64-v8a"
+    _pc_pick_arm64_native() {
+        local soname="$1" linker="${2:-}"
+        [ -f "$aarch64_lib/$soname" ] || { warn "ARM64 native lib $soname not found"; return 0; }
+        cp "$aarch64_lib/$soname" "$HNP_LAYOUT/lib/arm64-v8a/$soname"
+        [ -n "$linker" ] && [ ! -f "$HNP_LAYOUT/lib/arm64-v8a/$linker" ] && \
+            cp "$aarch64_lib/$soname" "$HNP_LAYOUT/lib/arm64-v8a/$linker"
+    }
+    _pc_pick_arm64_native "libfreetype.so.6"   "libfreetype.so"
+    _pc_pick_arm64_native "libxkbcommon.so.0"   "libxkbcommon.so"
+    _pc_pick_arm64_native "libxkbregistry.so.0" "libxkbregistry.so"
+    _pc_pick_arm64_native "libxml2.so.2"        "libxml2.so"
+    _pc_pick_arm64_native "libwayland-client.so.0" "libwayland-client.so"
+    _pc_pick_arm64_native "libffi.so.8"         "libffi.so"
+    log "  ARM64 native bridge libs -> lib/arm64-v8a/"
+fi
+
 cp "$SYSROOT/usr/lib/x86_64-linux-ohos/libc.so" "$HNP_LAYOUT/lib/x86_64/"
 
 # 交叉编译依赖 → bin/x86_64-unix/ (文件名 = ELF SONAME)
