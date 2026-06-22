@@ -211,7 +211,9 @@ extern "C" void Main(NativeChildProcess_Args args)
     OH_LOG_INFO(LOG_APP, "[WineChild] box64_hmos_main returned rc=%{public}d", box64_rc);
 
     delete[] box64_argv;
-    dlclose(box64_lib);
+    // 不 dlclose(box64_lib): Box64 内部注册了 atexit handler / 包装函数指针,
+    // dlclose 卸载 Box64 代码后, 后续 atexit 回调引用这些地址 → SIGSEGV。
+    // 进程即将退出, OS 会回收一切, 无需手动卸载。
     free(buf);
 #else
     // x86_64 Pad: dlopen ntdll.so → __wine_main (原生系统 linker 加载)
@@ -244,7 +246,10 @@ extern "C" void Main(NativeChildProcess_Args args)
     while (true) pause();
 
     OH_LOG_INFO(LOG_APP, "[WineChild] timeout waiting for Wine exit");
-    dlclose(ntdll);
+    // 不 dlclose(ntdll): 与 ARM64 Box64 路径同理 — __wine_main 内部通过
+    // Wine 的 atexit 机制注册了清理回调, 回调地址在 ntdll.so 代码段内。
+    // dlclose 卸载 ntdll 后, 后续 atexit 触发时引用已卸载代码 → SIGSEGV。
+    // 进程即将退出 (ExitProcess 或 alarm 超时), OS 会回收一切, 无需手动卸载。
     free(buf);
 #endif
 }
@@ -334,7 +339,7 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step7: box64_hmos_main returned rc=%d", wsRc);
 
     delete[] box64_argv;
-    dlclose(box64_lib);
+    // 不 dlclose(box64_lib): 原因同上 (atexit handler 引用已卸载代码)
 #else
     // x86_64 Pad: dlopen libwineserver.so (原生)
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step5: dlopen libwineserver.so...");
@@ -361,7 +366,7 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
     // ws_main 不应返回，若返回则等一阵再退出方便抓日志
     alarm(30);
     while (true) pause();
-    dlclose(h);
+    // 不 dlclose(h): ws_main 不应返回; 若返回进程即将退出, OS 回收
 #endif
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step9: wineserver process exiting");
     free(buf);
