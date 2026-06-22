@@ -178,8 +178,16 @@ void EglRenderer::RenderLoop() {
                             rowLen, fw, px.size(), fh);
                 glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLen);
             }
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, fw, fh, 0,
-                         GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            // 首帧/尺寸变化: glTexImage2D (分配 GPU 内存)
+            // 同尺寸: glTexSubImage2D (复用, 仅 memcpy → GPU)
+            if (fw != texW_ || fh != texH_) {
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, fw, fh, 0,
+                             GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+                texW_ = fw; texH_ = fh;
+            } else {
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw, fh,
+                                GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            }
             if (rowLen != fw) {
                 glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
             }
