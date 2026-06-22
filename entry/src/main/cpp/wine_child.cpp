@@ -32,6 +32,7 @@ static void* stderr_reader_thread(void* arg) {
     char buf[4096];
     ssize_t n;
     while ((n = read(ctx->fd, buf, sizeof(buf) - 1)) > 0) {
+        buf[n] = '\0';  // strtok_r 需要终止符, read() 不添加
         // 写文件
         if (ctx->fileFd >= 0) write(ctx->fileFd, buf, n);
         // 转发到 hilog（多行拆开）
