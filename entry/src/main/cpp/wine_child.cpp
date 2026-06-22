@@ -14,6 +14,7 @@
 #include <hilog/log.h>
 #include <unistd.h>
 #include <errno.h>
+#include <signal.h>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -235,9 +236,11 @@ extern "C" void Main(NativeChildProcess_Args args)
     // __wine_main → start_main_thread 启动了 Wine 主线程后立即返回。
     // Main() 不能返回——appspawn 会立即杀进程，Wine 主线程没机会跑。
     // Wine 主线程跑完 wineboot 后会调用 ExitProcess(0) 杀掉整个进程，
-    // 所以我们只需等待。设置 10 分钟超时兜底。
+    // 所以我们只需等待。用 alarm+pasue 替代 sleep 循环；
+    // ExitProcess 会在正常路径杀掉本进程，alarm 仅作兜底。
     OH_LOG_INFO(LOG_APP, "[WineChild] __wine_main returned, waiting for Wine main thread...");
-    for (int i = 0; i < 600; i++) sleep(1);
+    alarm(600);
+    while (true) pause();
 
     OH_LOG_INFO(LOG_APP, "[WineChild] timeout waiting for Wine exit");
     dlclose(ntdll);
@@ -355,7 +358,8 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step8: ws_main returned rc=%{public}d errno=%{public}d",
                 wsRc, errno);
     // ws_main 不应返回，若返回则等一阵再退出方便抓日志
-    for (int i = 0; i < 30; i++) sleep(1);
+    alarm(30);
+    while (true) pause();
     dlclose(h);
 #endif
     OH_LOG_INFO(LOG_APP, "[WineChild] ws step9: wineserver process exiting");

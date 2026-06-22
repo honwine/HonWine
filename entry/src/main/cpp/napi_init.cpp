@@ -29,6 +29,8 @@
 
 #include "broker.h"
 
+#include "wait_utils.h"
+
 // -- 全局状态 --
 // -- 多进程注册表 (替换旧的 gClientPid/gReaderRunning) --
 struct WineProcessEntry {
@@ -331,6 +333,26 @@ struct LaunchParams {
 #include <AbilityKit/native_child_process.h>
 #endif
 
+// 轮询 wineserver socket 是否就绪 (信号驱动, 避免盲等)
+static bool IsWineserverSocketReady() {
+    const char* prefix = "/data/storage/el2/base/files/.wine";
+    char sockDir[512];
+    snprintf(sockDir, sizeof(sockDir), "%s/.wineserver", prefix);
+    DIR* d = opendir(sockDir);
+    if (!d) return false;
+    bool found = false;
+    struct dirent* de;
+    while ((de = readdir(d))) {
+        if (de->d_name[0] == '.') continue;
+        char sockPath[1024];
+        snprintf(sockPath, sizeof(sockPath), "%s/%s/socket", sockDir, de->d_name);
+        struct stat st;
+        if (stat(sockPath, &st) == 0 && S_ISSOCK(st.st_mode)) { found = true; break; }
+    }
+    closedir(d);
+    return found;
+}
+
 static void LaunchThreadFunc(LaunchParams* p) {
     OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver + wineboot + wine starting in background");
     OH_LOG_INFO(LOG_APP, "[Launch-Async] XKB_CONFIG_ROOT=%{public}s",
@@ -371,7 +393,11 @@ static void LaunchThreadFunc(LaunchParams* p) {
             delete p;
             return;
         }
-        usleep(1500000); // 等 wineserver 初始化
+        // 等待 wineserver socket 就绪 (信号驱动)
+        if (!WaitFor("wineserver socket", IsWineserverSocketReady, 5000, 100)) {
+            OH_LOG_WARN(LOG_APP, "[Launch-Async] wineserver socket not detected, "
+                        "wineboot will recover via server_connect retry+start_server");
+        }
     }
 #else
     // PC: fork + execve
@@ -403,12 +429,16 @@ static void LaunchThreadFunc(LaunchParams* p) {
             _exit(127);
         }
         if (wsPid > 0) {
-            OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver pid=%{public}d, waiting 1.5s...", wsPid);
+            OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver pid=%{public}d", wsPid);
             if (wsPipeOk) {
                 close(wsPipe[1]);
                 StartStderrLogger(wsPipe[0], "wineserver-stderr");
             }
-            usleep(1500000);
+            // 等待 wineserver socket 就绪 (信号驱动)
+            if (!WaitFor("wineserver socket (PC)", IsWineserverSocketReady, 5000, 100)) {
+                OH_LOG_WARN(LOG_APP, "[Launch-Async] wineserver socket not detected, "
+                            "wineboot will recover via server_connect retry");
+            }
         } else {
             OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineserver fork failed");
             if (wsPipeOk) { close(wsPipe[0]); close(wsPipe[1]); }
@@ -459,7 +489,14 @@ static void LaunchThreadFunc(LaunchParams* p) {
             OH_LOG_INFO(LOG_APP, "[Launch-Async] wineboot done, pid=%{public}d", childPid);
 
             // 启动 explorer desktop shell，尺寸匹配输出
-            usleep(500000);
+            // 等待 wineboot 创建 drive_c (explorer 需要枚举桌面文件)
+            if (!WaitFor("wine prefix drive_c", []() {
+                DIR* d = opendir("/data/storage/el2/base/files/.wine/drive_c");
+                if (d) { closedir(d); return true; }
+                return false;
+            }, 10000, 200)) {
+                OH_LOG_WARN(LOG_APP, "[Launch-Async] drive_c not ready, launching explorer anyway");
+            }
             auto* ws = WaylandServer::GetInstance();
             int dw = ws->outputW_ > 0 ? ws->outputW_ : 1280;
             int dh = ws->outputH_ > 0 ? ws->outputH_ : 720;

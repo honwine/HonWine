@@ -11,6 +11,7 @@
  *   响应: [childPid: int32_le] [status: int32_le]   (8 字节)
  */
 #include "broker.h"
+#include "wait_utils.h"
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -193,7 +194,9 @@ int StartBrokerServer()
     gBrokerRunning.store(true, std::memory_order_release);
     std::thread(BrokerThreadFunc).detach();
 
-    // 给 broker 一点时间创建 socket
-    usleep(50000);  // 50ms
+    // 等待 broker socket 文件创建 (避免盲等)
+    if (!WaitFor("broker socket", []() { return access(kBrokerSocketPath, F_OK) == 0; }, 2000, 50)) {
+        OH_LOG_WARN(LOG_APP, "[Broker] socket creation slow, continuing anyway");
+    }
     return 0;
 }
