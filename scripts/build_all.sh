@@ -1,5 +1,5 @@
 #!/bin/bash
-# build_all.sh — 全量构建: Box64 → Wine → 组装 → HNP → HAP → 部署
+# build_all.sh 鈥?鍏ㄩ噺鏋勫缓: Box64 鈫?Wine 鈫?缁勮 鈫?HNP 鈫?HAP 鈫?閮ㄧ讲
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/.."

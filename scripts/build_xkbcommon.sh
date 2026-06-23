@@ -1,26 +1,29 @@
 #!/bin/bash
-# build_xkbcommon.sh — libffi + libxml2 + xkbcommon → sysroot-ext
+# build_xkbcommon.sh 鈥?libffi + libxml2 + xkbcommon 鈫?sysroot-ext
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/env.sh"
 
-log "=== 构建 xkbcommon 依赖 (x86_64) ==="
+log "=== 鏋勫缓 xkbcommon 渚濊禆 (x86_64) ==="
 
-if [ -f "$SYSROOT_EXT_LIB/libxkbcommon.so.0" ] \
+if [ -f "$SYSROOT_EXT_LIB/libxkbcommon.so" ] \
+   && [ -f "$SYSROOT_EXT_LIB/libxkbcommon.so.0" ] \
+   && [ -f "$SYSROOT_EXT_LIB/libxkbregistry.so" ] \
    && [ -f "$SYSROOT_EXT_LIB/libxkbregistry.so.0" ] \
    && [ -f "$SYSROOT_EXT_LIB/libffi.so.8" ] \
    && [ -f "$SYSROOT_EXT_PC/libffi.pc" ] \
+   && [ -f "$SYSROOT_EXT_LIB/libxml2.so" ] \
    && [ -f "$SYSROOT_EXT_LIB/libxml2.so.2" ] \
    && [ -f "$SYSROOT_EXT_PC/libxml-2.0.pc" ] \
    && [ -d "$SYSROOT_EXT_INC/xkbcommon" ] \
    && [ -f "$SYSROOT_EXT_PC/xkbcommon.pc" ]; then
-    log "xkbcommon 依赖已就绪，跳过"
+    log "xkbcommon 渚濊禆宸插氨缁紝璺宠繃"
     exit 0
 fi
 
 mkdir -p "$SYSROOT_EXT_INC" "$SYSROOT_EXT_LIB" "$SYSROOT_EXT_PC"
 
-# ── 1. libffi ──
+# 鈹€鈹€ 1. libffi 鈹€鈹€
 build_libffi() {
     local src="$ROOT/thirdparty/libffi"
     local build="$BUILD_DIR/libffi_build"
@@ -29,12 +32,13 @@ build_libffi() {
     log "--- libffi ---"
     mkdir -p "$build" && cd "$build"
     "$src/autogen.sh" 2>/dev/null || true
-    CC="/apps/harmony/sdk/default/openharmony/native/llvm/bin/clang --target=$TARGET --sysroot=$SYSROOT" \
+    CC="$CLANG --target=$TARGET --sysroot=$SYSROOT" \
     CFLAGS="-O2 -fPIC -D__MUSL__" \
     LDFLAGS="-fuse-ld=lld" \
-    "$src/configure" --host=x86_64-linux-gnu --prefix="$build/install" --disable-docs
+    "$src/configure" --host=x86_64-unknown-linux-musl --prefix="$build/install" --disable-docs --disable-dependency-tracking
     make -j$JOBS && make install
     cp "$build/install/lib/libffi.so.8.1.4" "$SYSROOT_EXT_LIB/libffi.so.8"
+    cp "$build/install/lib/libffi.so.8.1.4" "$SYSROOT_EXT_LIB/libffi.so"
     cp "$build/install/include/ffi.h" "$SYSROOT_EXT_INC/"
     cp "$build/install/include/ffitarget.h" "$SYSROOT_EXT_INC/"
     cat > "$SYSROOT_EXT_PC/libffi.pc" << EOF
@@ -49,16 +53,17 @@ Cflags: -I\${includedir}
 EOF
 }
 
-# ── 2. libxml2 ──
+# 鈹€鈹€ 2. libxml2 鈹€鈹€
 build_libxml2() {
     local src="$ROOT/thirdparty/libxml2"
     local build="$BUILD_DIR/libxml2_build"
+    local toolchain
     if [ -f "$SYSROOT_EXT_LIB/libxml2.so.2" ] && [ -d "$SYSROOT_EXT_INC/libxml" ] && [ -f "$SYSROOT_EXT_PC/libxml-2.0.pc" ]; then return 0; fi
 
     log "--- libxml2 ---"
+    toolchain="$(gen_cmake_toolchain x86_64 "$TARGET" "x86_64")"
     cmake -S "$src" -B "$build" -GNinja \
-        -DCMAKE_TOOLCHAIN_FILE="$OHOS_SDK/native/build/cmake/ohos.toolchain.cmake" \
-        -DOHOS_ARCH=x86_64 -DOHOS_PLATFORM=OHOS \
+        -DCMAKE_TOOLCHAIN_FILE="$toolchain" \
         -DCMAKE_BUILD_TYPE=Release \
         -DLIBXML2_WITH_PYTHON=OFF -DLIBXML2_WITH_TESTS=OFF \
         -DLIBXML2_WITH_PROGRAMS=OFF -DLIBXML2_WITH_HTTP=OFF \
@@ -68,6 +73,7 @@ build_libxml2() {
     cmake --build "$build"
     cmake --install "$build"
     cp "$build/libxml2.so.2.12.0" "$SYSROOT_EXT_LIB/libxml2.so.2"
+    cp "$build/libxml2.so.2.12.0" "$SYSROOT_EXT_LIB/libxml2.so"
     cp -r "$build/install/include/libxml2/libxml" "$SYSROOT_EXT_INC/"
     cat > "$SYSROOT_EXT_PC/libxml-2.0.pc" << EOF
 prefix=$SYSROOT_EXT/usr
@@ -81,7 +87,7 @@ Cflags: -I\${includedir}/libxml2
 EOF
 }
 
-# ── 3. xkbcommon ──
+# 鈹€鈹€ 3. xkbcommon 鈹€鈹€
 build_xkbcommon() {
     local src="$ROOT/thirdparty/libxkbcommon"
     local build="$BUILD_DIR/xkbcommon_build"
@@ -89,18 +95,17 @@ build_xkbcommon() {
     log "--- xkbcommon + xkbregistry ---"
     find "$src" -type f -exec touch -d '2 seconds ago' {} + 2>/dev/null || true
     meson_build "$build" "$src" \
-        -Denable-x11=false -Denable-wayland=true \
-        -Denable-xkbregistry=true -Denable-docs=false
-    ninja -C "$build"
+        -Denable-x11=false -Denable-tools=false \
+        -Denable-wayland=false -Denable-xkbregistry=true \
+        -Denable-bash-completion=false -Denable-docs=false
 
-    # 安装 (DESTDIR, 然后拷贝到 sysroot-ext)
-    DESTDIR=/tmp/xkc ninja -C "$build" install
-    find /tmp/xkc -name "libxkbcommon.so.0.0.0" -exec cp {} "$SYSROOT_EXT_LIB/libxkbcommon.so.0" \;
-    find /tmp/xkc -name "libxkbregistry.so.0.0.0" -exec cp {} "$SYSROOT_EXT_LIB/libxkbregistry.so.0" \;
-    find /tmp/xkc -path "*/include/xkbcommon" -type d | while read d; do
-        cp -r "$d" "$SYSROOT_EXT_INC/"
-    done
-    rm -rf /tmp/xkc
+    ninja -C "$build" libxkbcommon.so.0.0.0 libxkbregistry.so.0.0.0
+    cp "$build/libxkbcommon.so.0.0.0" "$SYSROOT_EXT_LIB/libxkbcommon.so"
+    cp "$build/libxkbcommon.so.0.0.0" "$SYSROOT_EXT_LIB/libxkbcommon.so.0"
+    cp "$build/libxkbregistry.so.0.0.0" "$SYSROOT_EXT_LIB/libxkbregistry.so"
+    cp "$build/libxkbregistry.so.0.0.0" "$SYSROOT_EXT_LIB/libxkbregistry.so.0"
+    mkdir -p "$SYSROOT_EXT_INC/xkbcommon"
+    cp "$src/include/xkbcommon/"*.h "$SYSROOT_EXT_INC/xkbcommon/"
     cat > "$SYSROOT_EXT_PC/xkbcommon.pc" << EOF
 prefix=$SYSROOT_EXT/usr
 includedir=\${prefix}/include
@@ -127,4 +132,4 @@ build_libffi
 build_libxml2
 build_xkbcommon
 
-log "xkbcommon 依赖 → sysroot-ext"
+log "xkbcommon 渚濊禆 鈫?sysroot-ext"

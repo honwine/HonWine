@@ -3,6 +3,7 @@
 #include "plugin_manager.h"
 #include "input_manager.h"
 #include "egl_renderer.h"
+#include "audio_broker.h"
 #include "wine_constants.h"
 
 #include <unistd.h>
@@ -18,6 +19,8 @@
 #include <cstdio>
 #include <cstring>
 #include <cerrno>
+#include <algorithm>
+#include <initializer_list>
 #include <string>
 #include <thread>
 #include <atomic>
@@ -95,15 +98,33 @@ static void KillAllProcesses() {
 static napi_threadsafe_function gStateTsfn = nullptr;
 static std::string gSockPath;
 
+static int CreateAudioBootstrapFd(const std::string& runtimeDir) {
+    if (!winehua::AudioBroker::GetInstance().EnsureStarted(runtimeDir)) {
+        OH_LOG_ERROR(LOG_APP, "[AudioBroker] failed to start for runtimeDir=%{public}s", runtimeDir.c_str());
+        return -1;
+    }
+
+    int fd = winehua::AudioBroker::GetInstance().CreateBootstrapHandle();
+    if (fd < 0) {
+        OH_LOG_ERROR(LOG_APP, "[AudioBroker] failed to create bootstrap FD for runtimeDir=%{public}s", runtimeDir.c_str());
+        return -1;
+    }
+
+    OH_LOG_INFO(LOG_APP, "[AudioBroker] bootstrap ready runtimeDir=%{public}s", runtimeDir.c_str());
+    return fd;
+}
+
 // -- fork/exec 后关闭继承的 fd --
-static void CloseInheritedFds(int keep1, int keep2) {
+static void CloseInheritedFds(std::initializer_list<int> keepFds) {
     DIR* d = opendir("/proc/self/fd");
     if (!d) return;
     int dfd = dirfd(d);
     dirent* e;
     while ((e = readdir(d))) {
         int fd = atoi(e->d_name);
-        if (fd > 2 && fd != dfd && fd != keep1 && fd != keep2) close(fd);
+        if (fd <= 2 || fd == dfd) continue;
+        if (std::find(keepFds.begin(), keepFds.end(), fd) != keepFds.end()) continue;
+        close(fd);
     }
     closedir(d);
 }
@@ -123,6 +144,14 @@ static void LogProcessExit(const char* tag, pid_t pid, int status) {
     }
 }
 
+static bool ShouldSuppressWineLogLine(const std::string& line) {
+    return line.find("OHOS-DBG:") != std::string::npos ||
+           line.find("Wine cannot find the FreeType font library.") != std::string::npos ||
+           line.find("use TrueType fonts please install a version of FreeType greater than") != std::string::npos ||
+           line.find("or equal to 2.0.5.") != std::string::npos ||
+           line.find("http://www.freetype.org") != std::string::npos;
+}
+
 // -- stderr pipe reader (后台线程, 逐行日志) --
 // done 为 nullptr 时永不停止 (适合 wineserver 等持久进程)
 static void StartStderrLogger(int fd, const char* tag,
@@ -139,7 +168,7 @@ static void StartStderrLogger(int fd, const char* tag,
                 size_t pos;
                 while ((pos = pending.find('\n')) != std::string::npos) {
                     std::string line = pending.substr(0, pos);
-                    if (!line.empty())
+                    if (!line.empty() && !ShouldSuppressWineLogLine(line))
                         OH_LOG_INFO(LOG_APP, "[%{public}s] %{public}s", tag, line.c_str());
                     pending.erase(0, pos + 1);
                 }
@@ -147,17 +176,24 @@ static void StartStderrLogger(int fd, const char* tag,
                 if (n == 0 || (n < 0 && errno != EINTR)) break;
             }
         }
-        if (!pending.empty())
+        if (!pending.empty() && !ShouldSuppressWineLogLine(pending))
             OH_LOG_INFO(LOG_APP, "[%{public}s] %{public}s", tag, pending.c_str());
         close(fd);
     }).detach();
+}
+
+static const char* GetWineDebugValue() {
+    const char* overrideValue = std::getenv("WINEHUA_WINEDEBUG");
+    if (overrideValue && overrideValue[0]) return overrideValue;
+    return "-all";
 }
 
 // -- 构建 Wine 环境变量 (wineserver/wineboot/wine 共用) --
 static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
                                               const std::string& sockName,
                                               const std::string& libPath,
-                                              const std::string& binDir) {
+                                              const std::string& binDir,
+                                              int audioBootstrapFd) {
     std::string shareDir = binDir + "/../share";
     std::string xkbDir = shareDir + "/X11/xkb";
     std::vector<std::string> env = {
@@ -182,12 +218,17 @@ static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
         "BOX64_DYNAREC_WEAKBARRIER=2",
         "BOX64_AVX=0",
         // Wine 调试通道: -all=关闭全部 (+wineboot,+module 等会产生大量 trace)
-        "WINEDEBUG=-all",
+        "WINEDEBUG=" + std::string(GetWineDebugValue()),
         "WINE_MONO=never",  // 跳过 Mono 安装 (OHOS 无网络, 会卡住)
         "XKB_CONFIG_ROOT=" + xkbDir,
         "PATH=/usr/local/bin:/data/app/bin:/data/service/hnp/bin:/usr/bin:/vendor/bin:" + binDir + "/x86_64-windows:" + binDir,
         "TMPDIR=" WINE_TMPDIR,
     };
+    if (audioBootstrapFd >= 0) {
+        env.push_back("WINE_OHOS_AUDIO_ENABLE=1");
+        env.push_back("WINE_OHOS_AUDIO_BOOTSTRAP_FD=" + std::to_string(audioBootstrapFd));
+        env.push_back("WINE_OHOS_AUDIO_PROTOCOL_VERSION=" + std::to_string(WINEHUA_AUDIO_PROTOCOL_VERSION));
+    }
 #ifdef __aarch64__
     // ARM64: x86_64 .so 由 Box64 加载，不在系统 LD_LIBRARY_PATH
     // LD_LIBRARY_PATH 只包含 ARM64 原生 .so
@@ -201,6 +242,134 @@ static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
 }
 
 // -- 客户端 stdout/stderr 读取线程 (每个进程独立) --
+static bool CopyFileContents(const std::string& src, const std::string& dst, mode_t mode = 0644) {
+    int inFd = open(src.c_str(), O_RDONLY);
+    if (inFd < 0) {
+        OH_LOG_WARN(LOG_APP, "[Files] open src failed %{public}s: %{public}s", src.c_str(), strerror(errno));
+        return false;
+    }
+
+    int outFd = open(dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, mode);
+    if (outFd < 0) {
+        OH_LOG_WARN(LOG_APP, "[Files] open dst failed %{public}s: %{public}s", dst.c_str(), strerror(errno));
+        close(inFd);
+        return false;
+    }
+
+    char buf[8192];
+    bool ok = true;
+    while (true) {
+        ssize_t n = read(inFd, buf, sizeof(buf));
+        if (n == 0) break;
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            ok = false;
+            OH_LOG_WARN(LOG_APP, "[Files] read failed %{public}s: %{public}s", src.c_str(), strerror(errno));
+            break;
+        }
+
+        ssize_t written = 0;
+        while (written < n) {
+            ssize_t w = write(outFd, buf + written, n - written);
+            if (w < 0) {
+                if (errno == EINTR) continue;
+                ok = false;
+                OH_LOG_WARN(LOG_APP, "[Files] write failed %{public}s: %{public}s", dst.c_str(), strerror(errno));
+                break;
+            }
+            written += w;
+        }
+        if (!ok) break;
+    }
+
+    close(outFd);
+    close(inFd);
+    if (ok) chmod(dst.c_str(), mode);
+    return ok;
+}
+
+static bool EnsureDirRecursive(const std::string& path, mode_t mode = 0755) {
+    std::string current;
+    size_t pos = 0;
+
+    if (path.empty()) return false;
+
+    if (path[0] == '/') {
+        current = "/";
+        pos = 1;
+    }
+
+    while (pos <= path.size()) {
+        size_t next = path.find('/', pos);
+        std::string part = path.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
+
+        if (!part.empty()) {
+            if (!current.empty() && current.back() != '/') current.push_back('/');
+            current.append(part);
+            if (mkdir(current.c_str(), mode) != 0 && errno != EEXIST) {
+                OH_LOG_WARN(LOG_APP, "[Files] mkdir failed %{public}s: %{public}s", current.c_str(), strerror(errno));
+                return false;
+            }
+        }
+
+        if (next == std::string::npos) break;
+        pos = next + 1;
+    }
+
+    return true;
+}
+
+static bool InstallBundledFile(const std::string& src,
+                               const std::string& dst,
+                               mode_t mode,
+                               const char* label) {
+    size_t slash;
+
+    if (access(src.c_str(), R_OK) != 0) {
+        OH_LOG_WARN(LOG_APP, "[Files] bundled %{public}s missing: %{public}s", label, src.c_str());
+        return false;
+    }
+
+    slash = dst.find_last_of('/');
+    if (slash != std::string::npos && !EnsureDirRecursive(dst.substr(0, slash))) return false;
+
+    return CopyFileContents(src, dst, mode);
+}
+
+static void CleanupLegacyDriveZSampleMirror() {
+    const std::string driveZRoot = "/data/storage/el2/base/files/.wine/dosdevices/z:";
+    const std::string legacySample = driveZRoot + "/Documents/Media/Alarm01.wav";
+    const std::string mediaDir = driveZRoot + "/Documents/Media";
+    const std::string docsDir = driveZRoot + "/Documents";
+
+    if (unlink(legacySample.c_str()) == 0) {
+        OH_LOG_INFO(LOG_APP, "[Files] removed legacy Z: sample mirror %{public}s", legacySample.c_str());
+    }
+
+    if (rmdir(mediaDir.c_str()) == 0) {
+        OH_LOG_INFO(LOG_APP, "[Files] removed empty legacy dir %{public}s", mediaDir.c_str());
+    }
+    if (rmdir(docsDir.c_str()) == 0) {
+        OH_LOG_INFO(LOG_APP, "[Files] removed empty legacy dir %{public}s", docsDir.c_str());
+    }
+    if (rmdir(driveZRoot.c_str()) == 0) {
+        OH_LOG_INFO(LOG_APP, "[Files] restored Z: fallback mapping by removing %{public}s", driveZRoot.c_str());
+    }
+}
+
+static void InstallBundledWineSamples(const std::string& binDir) {
+    const std::string sampleExeSrc = binDir + "/x86_64-windows/winehua_audio_smoke.exe";
+    const std::string sampleExeDst = "/data/storage/el2/base/files/.wine/drive_c/winehua_audio_smoke.exe";
+    const std::string alarmSrc = binDir + "/x86_64-windows/Alarm01.wav";
+    const std::string alarmDriveCDst = "/data/storage/el2/base/files/.wine/drive_c/Documents/Media/Alarm01.wav";
+    const std::string alarmLocalDst = "/data/storage/el2/base/files/.wine/drive_c/Alarm01.wav";
+
+    CleanupLegacyDriveZSampleMirror();
+    InstallBundledFile(sampleExeSrc, sampleExeDst, 0755, "sample exe");
+    InstallBundledFile(alarmSrc, alarmDriveCDst, 0644, "Alarm01.wav");
+    InstallBundledFile(alarmSrc, alarmLocalDst, 0644, "Alarm01.wav");
+}
+
 static void ReaderThread(int fd, pid_t pid, std::shared_ptr<std::atomic<bool>> active) {
     char buf[2048];
     std::string pending;
@@ -212,7 +381,8 @@ static void ReaderThread(int fd, pid_t pid, std::shared_ptr<std::atomic<bool>> a
             size_t pos;
             while ((pos = pending.find('\n')) != std::string::npos) {
                 std::string line = pending.substr(0, pos);
-                OH_LOG_INFO(LOG_APP, "[wine:%{public}d] %{public}s", pid, line.c_str());
+                if (!ShouldSuppressWineLogLine(line))
+                    OH_LOG_INFO(LOG_APP, "[wine:%{public}d] %{public}s", pid, line.c_str());
                 pending.erase(0, pos + 1);
             }
         } else if (n == 0) {
@@ -222,7 +392,7 @@ static void ReaderThread(int fd, pid_t pid, std::shared_ptr<std::atomic<bool>> a
             break;
         }
     }
-    if (!pending.empty()) {
+    if (!pending.empty() && !ShouldSuppressWineLogLine(pending)) {
         OH_LOG_INFO(LOG_APP, "[wine:%{public}d] %{public}s", pid, pending.c_str());
     }
     close(fd);
@@ -365,7 +535,11 @@ static void LaunchThreadFunc(LaunchParams* p) {
                 (p->winehuaBin + "/../share/X11/xkb").c_str());
 
     // 组装 envp 环境变量
-    p->envStrs = BuildWineEnv(p->sockDir, p->sockName, p->libPath, p->winehuaBin);
+    int audioBootstrapFd = -1;
+#ifndef PAD_MODE
+    audioBootstrapFd = CreateAudioBootstrapFd(p->sockDir);
+#endif
+    p->envStrs = BuildWineEnv(p->sockDir, p->sockName, p->libPath, p->winehuaBin, audioBootstrapFd);
     for (auto& s : p->envStrs) p->envp.push_back((char*)s.c_str());
     p->envp.push_back(nullptr);
 
@@ -425,7 +599,7 @@ static void LaunchThreadFunc(LaunchParams* p) {
                 dup2(wsPipe[1], STDERR_FILENO);
                 if (wsPipe[1] > 2) close(wsPipe[1]);
             }
-            CloseInheritedFds(STDOUT_FILENO, STDERR_FILENO);
+            CloseInheritedFds({STDOUT_FILENO, STDERR_FILENO, audioBootstrapFd});
             for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
             prctl(PR_SET_NAME, "wl-wineserver", 0, 0, 0);
             chdir(p->winehuaBin.c_str());
@@ -447,6 +621,7 @@ static void LaunchThreadFunc(LaunchParams* p) {
         } else {
             OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineserver fork failed");
             if (wsPipeOk) { close(wsPipe[0]); close(wsPipe[1]); }
+            if (audioBootstrapFd >= 0) close(audioBootstrapFd);
             if (gStateTsfn)
                 napi_call_threadsafe_function(gStateTsfn, strdup("wineserver-failed"), napi_tsfn_blocking);
             delete p;
@@ -530,13 +705,17 @@ static void LaunchThreadFunc(LaunchParams* p) {
         OH_LOG_INFO(LOG_APP, "[Launch-Async] running wineboot --init...");
         pid_t bootPid = fork();
         if (bootPid == 0) {
-            CloseInheritedFds(STDOUT_FILENO, STDERR_FILENO);
+            CloseInheritedFds({STDOUT_FILENO, STDERR_FILENO, audioBootstrapFd});
             for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
             prctl(PR_SET_NAME, "wl-wineboot", 0, 0, 0);
             chdir(p->winehuaBin.c_str());
             const char* bootArgv[] = {"./box64", "./wine", "./wineboot", "--init", nullptr};
             execve("./box64", (char* const*)bootArgv, p->envp.data());
             _exit(127);
+        }
+        if (audioBootstrapFd >= 0) {
+            close(audioBootstrapFd);
+            audioBootstrapFd = -1;
         }
         if (bootPid > 0) {
             int bootStatus = 0;
@@ -545,6 +724,8 @@ static void LaunchThreadFunc(LaunchParams* p) {
         }
     }
 #endif
+
+    InstallBundledWineSamples(p->winehuaBin);
 
     if (gStateTsfn) {
         napi_call_threadsafe_function(gStateTsfn, strdup("wine-ready"), napi_tsfn_blocking);
@@ -630,8 +811,12 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
     auto pos = sockStr.find_last_of('/');
     std::string sockDir = (pos == std::string::npos) ? "/tmp" : sockStr.substr(0, pos);
     std::string sockName = (pos == std::string::npos) ? sockStr : sockStr.substr(pos + 1);
+    int audioBootstrapFd = -1;
+#ifndef PAD_MODE
+    audioBootstrapFd = CreateAudioBootstrapFd(sockDir);
+#endif
 
-    std::vector<std::string> envStrs = BuildWineEnv(sockDir, sockName, libPath, binDir);
+    std::vector<std::string> envStrs = BuildWineEnv(sockDir, sockName, libPath, binDir, audioBootstrapFd);
     std::vector<char*> envp;
     for (auto& s : envStrs) envp.push_back((char*)s.c_str());
     envp.push_back(nullptr);
@@ -720,12 +905,14 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
         if (pipefd[1] > 2) close(pipefd[1]);
         for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
         prctl(PR_SET_NAME, "wl-client", 0, 0, 0);
-        CloseInheritedFds(STDOUT_FILENO, STDERR_FILENO);
+        CloseInheritedFds({STDOUT_FILENO, STDERR_FILENO, audioBootstrapFd});
         chdir(binDir);
         const char* cargv[] = {"./box64", "./wine", exePath.c_str(), nullptr};
         execve("./box64", (char* const*)cargv, envp.data());
         _exit(127);
     }
+
+    if (audioBootstrapFd >= 0) close(audioBootstrapFd);
 
     if (pid > 0) {
         close(pipefd[1]);

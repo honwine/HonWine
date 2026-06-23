@@ -95,6 +95,12 @@
         "launchType": "multiton",
         "removeMissionAfterTerminate": true
       }
+    ],
+    "hnpPackages": [
+      {
+        "package": "winehua.hnp",
+        "type": "public"
+      }
     ]
   }
 }
