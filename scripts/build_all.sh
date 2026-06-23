@@ -1,6 +1,9 @@
 #!/bin/bash
-# build_all.sh 鈥?鍏ㄩ噺鏋勫缓: Box64 鈫?Wine 鈫?缁勮 鈫?HNP 鈫?HAP 鈫?閮ㄧ讲
+# Legacy helper kept for low-level experiments.
+# Prefer scripts/rebuild_harmony.ps1 or scripts/rebuild_harmony.sh for the
+# supported MSYS2 / WSL build flow.
 set -euo pipefail
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR/.."
 

@@ -33,6 +33,20 @@ ensure_target_libffi() {
 
     log "--- libffi (for wayland) ---"
     mkdir -p "$SYSROOT_EXT_INC" "$SYSROOT_EXT_LIB" "$SYSROOT_EXT_PC" "$build"
+    # Windows-synced trees may leave libffi text files with CRLF, which breaks WSL shell execution.
+    python3 - "$src" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for path in root.rglob("*"):
+    if not path.is_file():
+        continue
+    data = path.read_bytes()
+    if b"\0" in data or b"\r" not in data:
+        continue
+    path.write_bytes(data.replace(b"\r\n", b"\n"))
+PY
     cd "$build"
     "$src/autogen.sh" 2>/dev/null || true
     CC="$CLANG --target=$TARGET --sysroot=$SYSROOT" \

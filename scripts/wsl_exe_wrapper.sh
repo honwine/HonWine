@@ -14,6 +14,84 @@ cleanup() {
 
 trap cleanup EXIT
 
+detect_host_adapter() {
+    if [ -n "${WINDOWS_WRAPPER_HOST:-}" ]; then
+        printf '%s\n' "$WINDOWS_WRAPPER_HOST"
+        return 0
+    fi
+
+    if [ -n "${MSYSTEM:-}" ] && command -v cygpath >/dev/null 2>&1; then
+        printf 'msys2\n'
+        return 0
+    fi
+
+    if command -v wslpath >/dev/null 2>&1; then
+        if grep -qi microsoft /proc/sys/kernel/osrelease 2>/dev/null || grep -qi microsoft /proc/version 2>/dev/null; then
+            printf 'wsl\n'
+            return 0
+        fi
+    fi
+
+    printf 'posix\n'
+}
+
+HOST_ADAPTER="$(detect_host_adapter)"
+
+cleanup_temp_dir() {
+    local value="$1"
+    temp_files+=("$value")
+}
+
+is_windows_style_path() {
+    [[ "${1:-}" =~ ^[A-Za-z]:[\\/].*$ ]]
+}
+
+normalize_tool_path() {
+    local value="$1"
+    local drive=""
+    local rest=""
+
+    if ! is_windows_style_path "$value"; then
+        printf '%s\n' "$value"
+        return 0
+    fi
+
+    case "$HOST_ADAPTER" in
+        wsl)
+            if [[ "$value" =~ ^([A-Za-z]):[\\/](.*)$ ]]; then
+                drive="${BASH_REMATCH[1],,}"
+                rest="${BASH_REMATCH[2]//\\//}"
+                if [ -n "$rest" ]; then
+                    printf '/mnt/%s/%s\n' "$drive" "$rest"
+                else
+                    printf '/mnt/%s\n' "$drive"
+                fi
+                return 0
+            fi
+            ;;
+        msys2)
+            if command -v cygpath >/dev/null 2>&1; then
+                cygpath -u "$value"
+                return 0
+            fi
+            if [[ "$value" =~ ^([A-Za-z]):[\\/](.*)$ ]]; then
+                drive="${BASH_REMATCH[1],,}"
+                rest="${BASH_REMATCH[2]//\\//}"
+                if [ -n "$rest" ]; then
+                    printf '/%s/%s\n' "$drive" "$rest"
+                else
+                    printf '/%s\n' "$drive"
+                fi
+                return 0
+            fi
+            ;;
+    esac
+
+    printf '%s\n' "$value"
+}
+
+tool="$(normalize_tool_path "$tool")"
+
 path_exists_or_parent_exists() {
     local value="$1"
     [[ "$value" == /* ]] && { [ -e "$value" ] || [ -e "$(dirname "$value")" ]; }
@@ -25,19 +103,19 @@ rewrite_sdk_overlay_path() {
     local dll_candidate=""
     local restool_plugin_basename=""
 
-    if [ -n "${WSL_RESTOOL_PLUGIN_DIR:-}" ]; then
+    if [ -n "${RESTOOL_PLUGIN_DIR:-}" ]; then
         restool_plugin_basename="$(basename "$mapped")"
         case "$restool_plugin_basename" in
             libimage_transcoder_shared.so|libimage_transcoder_shared.dylib|libimage_transcoder_shared.dll)
-                mapped="$WSL_RESTOOL_PLUGIN_DIR/libimage_transcoder_shared.dll"
+                mapped="$RESTOOL_PLUGIN_DIR/libimage_transcoder_shared.dll"
                 ;;
         esac
     fi
 
-    if [ -n "${WSL_SDK_MAP_HMS_FROM:-}" ] && [ -n "${WSL_SDK_MAP_HMS_TO:-}" ] && [[ "$mapped" == "$WSL_SDK_MAP_HMS_FROM/"* ]]; then
-        mapped="${WSL_SDK_MAP_HMS_TO}${mapped#$WSL_SDK_MAP_HMS_FROM}"
-    elif [ -n "${WSL_SDK_MAP_OHOS_FROM:-}" ] && [ -n "${WSL_SDK_MAP_OHOS_TO:-}" ] && [[ "$mapped" == "$WSL_SDK_MAP_OHOS_FROM/"* ]]; then
-        mapped="${WSL_SDK_MAP_OHOS_TO}${mapped#$WSL_SDK_MAP_OHOS_FROM}"
+    if [ -n "${SDK_MAP_HMS_FROM:-}" ] && [ -n "${SDK_MAP_HMS_TO:-}" ] && [[ "$mapped" == "$SDK_MAP_HMS_FROM/"* ]]; then
+        mapped="${SDK_MAP_HMS_TO}${mapped#$SDK_MAP_HMS_FROM}"
+    elif [ -n "${SDK_MAP_OHOS_FROM:-}" ] && [ -n "${SDK_MAP_OHOS_TO:-}" ] && [[ "$mapped" == "$SDK_MAP_OHOS_FROM/"* ]]; then
+        mapped="${SDK_MAP_OHOS_TO}${mapped#$SDK_MAP_OHOS_FROM}"
     fi
 
     case "$mapped" in
@@ -54,18 +132,34 @@ rewrite_sdk_overlay_path() {
     printf '%s\n' "$mapped"
 }
 
+to_windows_path() {
+    local value="$1"
+
+    case "$HOST_ADAPTER" in
+        wsl)
+            wslpath -w "$value"
+            ;;
+        msys2)
+            cygpath -w "$value"
+            ;;
+        *)
+            printf '%s\n' "$value"
+            ;;
+    esac
+}
+
 convert_path() {
     local value="$1"
 
-    if ! command -v wslpath >/dev/null 2>&1; then
+    value="$(rewrite_sdk_overlay_path "$value")"
+
+    if [ "$HOST_ADAPTER" = "posix" ]; then
         printf '%s\n' "$value"
         return 0
     fi
 
-    value="$(rewrite_sdk_overlay_path "$value")"
-
     if path_exists_or_parent_exists "$value"; then
-        wslpath -w "$value"
+        to_windows_path "$value"
         return 0
     fi
 
@@ -89,20 +183,21 @@ convert_restool_file_list() {
 
     tmp_dir="$(mktemp -d "$(dirname "$value")/.restool-config.XXXXXX")"
     tmp_file="$tmp_dir/$(basename "$value")"
-    python3 - "$value" "$tmp_file" "$tmp_dir" <<'PY'
+    cleanup_temp_dir "$tmp_dir"
+    python3 - "$value" "$tmp_file" "$tmp_dir" "$HOST_ADAPTER" <<'PY'
 import json
 import os
 import subprocess
 import sys
 
-src, dst, tmp_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+src, dst, tmp_dir, host_adapter = sys.argv[1:5]
 cache = {}
 counter = 0
-ohos_from = os.environ.get("WSL_SDK_MAP_OHOS_FROM", "")
-ohos_to = os.environ.get("WSL_SDK_MAP_OHOS_TO", "")
-hms_from = os.environ.get("WSL_SDK_MAP_HMS_FROM", "")
-hms_to = os.environ.get("WSL_SDK_MAP_HMS_TO", "")
-restool_plugin_dir = os.environ.get("WSL_RESTOOL_PLUGIN_DIR", "")
+ohos_from = os.environ.get("SDK_MAP_OHOS_FROM", "")
+ohos_to = os.environ.get("SDK_MAP_OHOS_TO", "")
+hms_from = os.environ.get("SDK_MAP_HMS_FROM", "")
+hms_to = os.environ.get("SDK_MAP_HMS_TO", "")
+restool_plugin_dir = os.environ.get("RESTOOL_PLUGIN_DIR", "")
 
 def rewrite_sdk_overlay_path(value: str) -> str:
     mapped = value
@@ -137,14 +232,12 @@ def looks_like_path(value: object) -> bool:
         return False
 
     resolved = rewrite_sdk_overlay_path(value)
-    return (
-        os.path.exists(resolved)
-        or os.path.exists(os.path.dirname(resolved) or "/")
-    )
+    return os.path.exists(resolved) or os.path.exists(os.path.dirname(resolved) or "/")
 
 def to_windows_path(value: str) -> str:
     resolved = rewrite_sdk_overlay_path(value)
-    return subprocess.check_output(["wslpath", "-w", resolved], text=True).strip()
+    cmd = ["wslpath", "-w", resolved] if host_adapter == "wsl" else ["cygpath", "-w", resolved]
+    return subprocess.check_output(cmd, text=True).strip()
 
 def next_temp_json_path(source_path: str) -> str:
     global counter
@@ -192,7 +285,6 @@ def convert(value: object):
 rewrite_json_file(src, dst)
 PY
 
-    temp_files+=("$tmp_dir")
     convert_path "$tmp_file"
 }
 
@@ -214,18 +306,19 @@ convert_response_file() {
 
     tmp_dir="$(mktemp -d "$(dirname "$source_path")/.response-file.XXXXXX")"
     tmp_file="$tmp_dir/$(basename "$source_path")"
-    python3 - "$source_path" "$tmp_file" <<'PY'
+    cleanup_temp_dir "$tmp_dir"
+    python3 - "$source_path" "$tmp_file" "$HOST_ADAPTER" <<'PY'
 import os
 import re
 import subprocess
 import sys
 
-src, dst = sys.argv[1], sys.argv[2]
-ohos_from = os.environ.get("WSL_SDK_MAP_OHOS_FROM", "")
-ohos_to = os.environ.get("WSL_SDK_MAP_OHOS_TO", "")
-hms_from = os.environ.get("WSL_SDK_MAP_HMS_FROM", "")
-hms_to = os.environ.get("WSL_SDK_MAP_HMS_TO", "")
-restool_plugin_dir = os.environ.get("WSL_RESTOOL_PLUGIN_DIR", "")
+src, dst, host_adapter = sys.argv[1:4]
+ohos_from = os.environ.get("SDK_MAP_OHOS_FROM", "")
+ohos_to = os.environ.get("SDK_MAP_OHOS_TO", "")
+hms_from = os.environ.get("SDK_MAP_HMS_FROM", "")
+hms_to = os.environ.get("SDK_MAP_HMS_TO", "")
+restool_plugin_dir = os.environ.get("RESTOOL_PLUGIN_DIR", "")
 
 def rewrite_sdk_overlay_path(value: str) -> str:
     mapped = value
@@ -264,7 +357,8 @@ def looks_like_path(value: str) -> bool:
 
 def to_windows_path(value: str) -> str:
     resolved = rewrite_sdk_overlay_path(value)
-    return subprocess.check_output(["wslpath", "-w", resolved], text=True).strip()
+    cmd = ["wslpath", "-w", resolved] if host_adapter == "wsl" else ["cygpath", "-w", resolved]
+    return subprocess.check_output(cmd, text=True).strip()
 
 pattern = re.compile(r"/[^;\s\r\n\"']+")
 text = open(src, "r", encoding="utf-8").read()
@@ -279,7 +373,6 @@ with open(dst, "w", encoding="utf-8") as handle:
     handle.write(pattern.sub(replace, text))
 PY
 
-    temp_files+=("$tmp_dir")
     printf '@%s\n' "$(convert_path "$tmp_file")"
 }
 
@@ -295,13 +388,13 @@ build_windows_path_env() {
         current_windows_path="$(cmd.exe /c echo %PATH% 2>/dev/null | tr -d '\r' | tail -n 1)"
     fi
 
-    if [ -n "${WSL_EXE_EXTRA_PATHS:-}" ] && command -v wslpath >/dev/null 2>&1; then
+    if [ -n "${WINDOWS_EXE_EXTRA_PATHS:-}" ] && [ "$HOST_ADAPTER" != "posix" ]; then
         IFS=':'
-        for item in $WSL_EXE_EXTRA_PATHS; do
+        for item in $WINDOWS_EXE_EXTRA_PATHS; do
             [ -n "$item" ] || continue
             resolved="$(rewrite_sdk_overlay_path "$item")"
             [ -d "$resolved" ] || continue
-            converted="$(wslpath -w "$resolved")"
+            converted="$(to_windows_path "$resolved")"
             if [ -z "$extra_windows_path" ]; then
                 extra_windows_path="$converted"
             else
@@ -399,6 +492,11 @@ if [[ "$tool" == *.exe ]]; then
     if [ -n "$windows_path_env" ]; then
         export PATH="$windows_path_env"
     fi
+fi
+
+if [ "$HOST_ADAPTER" = "msys2" ] && [[ "$tool" == *.exe ]]; then
+    export MSYS2_ARG_CONV_EXCL='*'
+    export MSYS2_ENV_CONV_EXCL='*'
 fi
 
 "$tool" "${converted[@]}"

@@ -1,11 +1,11 @@
 ---
 name: winehua-harmony-build
-description: Build, package, deploy, and troubleshoot WineHua in this repository across HarmonyOS targets. Use when working on WSL + Windows DevEco builds, HNP/HAP packaging, x86_64 PC emulator deployment, arm64 device builds, or runtime issues around wineserver, wineboot, notepad, cmd, and the shared rebuild scripts.
+description: Build, package, deploy, and troubleshoot WineHua in this repository across HarmonyOS targets. Use when working on MSYS2 + Windows DevEco builds, WSL fallback builds, HNP/HAP packaging, x86_64 PC emulator deployment, arm64 device builds, or runtime issues around wineserver, wineboot, notepad, cmd, and the shared rebuild scripts.
 ---
 
 # WineHua Build
 
-Use this skill for build and deployment work in `D:\Work\WineHua`.
+Use this skill for build and deployment work in the current WineHua repository checkout.
 
 ## Quick Start
 
@@ -14,15 +14,22 @@ Use this skill for build and deployment work in `D:\Work\WineHua`.
 3. Read [`docs/CURRENT_STATUS.md`](../../../docs/CURRENT_STATUS.md) if the task involves runtime expectations or suspected regressions.
 4. Prefer the shared rebuild entrypoints instead of hand-assembling `build.sh` commands:
    - Windows host: `scripts/rebuild_harmony.ps1`
-   - WSL build-only: `scripts/rebuild_harmony.sh`
+   - Inner build shell: `scripts/rebuild_harmony.sh`
+   - MSYS2 bootstrap: `scripts/bootstrap_msys2.ps1`
 
 ## Workflow
 
 ### Choose the entrypoint
 
 - Use `scripts/rebuild_harmony.ps1` when the task includes build + install + start + log collection.
-- Use `scripts/rebuild_harmony.sh` when the task is build-only inside WSL.
+- Use `scripts/rebuild_harmony.sh` when the task is build-only inside one shell.
 - Use raw `build.sh` only for step-by-step debugging of a single failing stage.
+
+### Choose the backend
+
+- Use `-Backend msys2` for the default path.
+- Use `-Backend wsl` for fallback verification or when comparing against the old host environment.
+- Use `auto` only when you are comfortable with the script preferring MSYS2 when available.
 
 ### Choose the mode
 
@@ -40,9 +47,9 @@ Use this skill for build and deployment work in `D:\Work\WineHua`.
 
 ## Important Rules
 
-- Keep the full build chain inside one WSL shell. Do not split `deps`, `wine`, `native`, `hnp`, and `hap` across separate WSL invocations.
+- Keep the full build chain inside one shell. Do not split `deps`, `wine`, `native`, `hnp`, and `hap` across separate backend invocations.
 - Treat `scripts/rebuild_harmony.ps1` and `scripts/rebuild_harmony.sh` as the source of truth for future build automation changes.
-- Remember that Mono/Gecko interactive installation is intentionally suppressed via `WINEDLLOVERRIDES=mscoree,mshtml=`. Do not file `.NET` or `mshtml` failures as unrelated regressions without checking this first.
+- Remember that Mono/Gecko interactive installation is intentionally suppressed via `WINEDLLOVERRIDES=mscoree,mshtml=`.
 - Treat missing optional Wayland protocols as known limitations unless the task is specifically about clipboard, pointer lock, relative pointer, or IME support.
 
 ## References

@@ -67,7 +67,7 @@ build_native() {
             --without-x --without-freetype --without-alsa \
             --without-opengl --without-vulkan
     fi
-    make -j$(nproc)
+    make -j"${JOBS:-$(nproc)}"
     echo "    Native build complete"
     cd "$ROOT"
 }
@@ -121,7 +121,7 @@ build_ohos() {
     cd "$OHOS_BUILD"
 
     # Build all Unix .so files (continue on error for PE-only targets)
-    make -k -j$(nproc) \
+    make -k -j"${JOBS:-$(nproc)}" \
         CC="$CC_OHOS" \
         CFLAGS="$CFLAGS_OHOS" \
         LDFLAGS="$LDFLAGS_OHOS" \

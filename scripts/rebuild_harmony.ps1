@@ -1,3 +1,25 @@
+<#
+.SYNOPSIS
+Unified Windows-host entrypoint for WineHua Harmony builds.
+
+.DESCRIPTION
+Chooses a host backend (MSYS2 by default, WSL as fallback), runs the
+single-shell inner build orchestration, and optionally installs, launches,
+and collects logs from a target device or emulator.
+
+.PARAMETER Mode
+Build or runtime action to execute. Supported values:
+doctor, full, incremental, wine, package, deploy, logs.
+
+.PARAMETER Backend
+Host backend selection: auto, msys2, or wsl.
+
+.PARAMETER Arch
+Target architecture: x86_64, arm64, or all.
+
+.PARAMETER Target
+HDC target key or ip:port. Use auto only when exactly one target is visible.
+#>
 [CmdletBinding()]
 param(
     [ValidateSet('doctor', 'full', 'incremental', 'wine', 'package', 'deploy', 'logs')]
@@ -6,12 +28,16 @@ param(
     [ValidateSet('x86_64', 'arm64', 'all')]
     [string]$Arch = 'x86_64',
 
+    [ValidateSet('auto', 'msys2', 'wsl')]
+    [string]$Backend = 'auto',
+
     [string]$Target = 'auto',
     [int]$WaitSeconds = 20,
     [int]$TailLines = 260,
     [string]$HdcPath = '',
     [string]$WslExe = 'wsl.exe',
     [string]$WslDistro = '',
+    [string]$MsysRoot = 'C:\msys64',
     [switch]$NoAutoHeal,
     [switch]$SkipInstall,
     [switch]$SkipLaunch,
@@ -33,20 +59,33 @@ function Write-Info {
     Write-Host "[rebuild] $Message"
 }
 
-function Convert-ToWslPath {
-    param([string]$WindowsPath)
+function Convert-ToPosixPath {
+    param(
+        [Parameter(Mandatory = $true)][string]$WindowsPath,
+        [Parameter(Mandatory = $true)][ValidateSet('wsl', 'msys2')][string]$Style
+    )
 
     $full = [System.IO.Path]::GetFullPath($WindowsPath)
     if ($full -notmatch '^(?<drive>[A-Za-z]):\\(?<rest>.*)$') {
-        throw "Unsupported Windows path for WSL conversion: $WindowsPath"
+        throw "Unsupported Windows path for $Style conversion: $WindowsPath"
     }
 
     $drive = $Matches.drive.ToLowerInvariant()
     $rest = $Matches.rest -replace '\\', '/'
-    if ([string]::IsNullOrEmpty($rest)) {
-        return "/mnt/$drive"
+    switch ($Style) {
+        'wsl' {
+            if ([string]::IsNullOrEmpty($rest)) {
+                return "/mnt/$drive"
+            }
+            return "/mnt/$drive/$rest"
+        }
+        'msys2' {
+            if ([string]::IsNullOrEmpty($rest)) {
+                return "/$drive"
+            }
+            return "/$drive/$rest"
+        }
     }
-    return "/mnt/$drive/$rest"
 }
 
 function Resolve-HdcPath {
@@ -77,6 +116,57 @@ function Resolve-HdcPath {
     }
 
     throw 'Unable to locate hdc.exe. Pass -HdcPath or install DevEco Studio toolchains.'
+}
+
+function Resolve-MsysBashPath {
+    param([string]$RequestedRoot)
+
+    $candidates = @(
+        $env:MSYS2_BASH,
+        (Join-Path $RequestedRoot 'usr\bin\bash.exe'),
+        'C:\msys64\usr\bin\bash.exe'
+    ) | Where-Object { $_ }
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    throw "Unable to locate MSYS2 bash.exe under $RequestedRoot. Run scripts\bootstrap_msys2.ps1 first or pass -MsysRoot."
+}
+
+function Test-WslAvailable {
+    param([string]$ExePath)
+
+    $cmd = Get-Command $ExePath -ErrorAction SilentlyContinue
+    return $null -ne $cmd
+}
+
+function Test-MsysAvailable {
+    param([string]$RootPath)
+
+    try {
+        Resolve-MsysBashPath -RequestedRoot $RootPath | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Resolve-BuildBackend {
+    if ($Backend -ne 'auto') {
+        return $Backend
+    }
+
+    if (Test-MsysAvailable -RootPath $MsysRoot) {
+        return 'msys2'
+    }
+    if (Test-WslAvailable -ExePath $WslExe) {
+        return 'wsl'
+    }
+
+    throw 'No build backend is available. Install MSYS2 via scripts\bootstrap_msys2.ps1 or make sure WSL is installed.'
 }
 
 function Invoke-Checked {
@@ -145,13 +235,14 @@ function Invoke-WslBuild {
         throw "Build script does not exist: $BuildScript"
     }
 
-    $repoWsl = Convert-ToWslPath $RepoRoot
+    $repoWsl = Convert-ToPosixPath -WindowsPath $RepoRoot -Style 'wsl'
     $modeArg = $ModeName.Replace("'", "'""'""'")
     $archArg = $ArchName.Replace("'", "'""'""'")
     $command = "cd '$repoWsl' && bash './scripts/rebuild_harmony.sh' '$modeArg' '$archArg'"
     if ($DisableAutoHeal) {
         $command += " --no-auto-heal"
     }
+
     $args = @()
     if ($WslDistro) {
         $args += @('-d', $WslDistro)
@@ -160,6 +251,65 @@ function Invoke-WslBuild {
 
     Write-Info "WSL build: mode=$ModeName arch=$ArchName"
     Invoke-Checked -FilePath $WslExe -ArgumentList $args
+}
+
+function Invoke-MsysBuild {
+    param(
+        [string]$ModeName,
+        [string]$ArchName,
+        [bool]$DisableAutoHeal = $false
+    )
+
+    if (-not (Test-Path $BuildScript)) {
+        throw "Build script does not exist: $BuildScript"
+    }
+
+    $bashPath = Resolve-MsysBashPath -RequestedRoot $MsysRoot
+    $repoMsys = Convert-ToPosixPath -WindowsPath $RepoRoot -Style 'msys2'
+    $modeArg = $ModeName.Replace("'", "'""'""'")
+    $archArg = $ArchName.Replace("'", "'""'""'")
+    $command = "cd '$repoMsys' && bash './scripts/rebuild_harmony.sh' '$modeArg' '$archArg'"
+    if ($DisableAutoHeal) {
+        $command += " --no-auto-heal"
+    }
+
+    $savedEnv = @{
+        'MSYSTEM' = $env:MSYSTEM
+        'CHERE_INVOKING' = $env:CHERE_INVOKING
+        'MSYS' = $env:MSYS
+    }
+
+    try {
+        $env:MSYSTEM = 'MSYS'
+        $env:CHERE_INVOKING = '1'
+        $env:MSYS = 'winsymlinks:nativestrict'
+        Write-Info "MSYS2 build: mode=$ModeName arch=$ArchName root=$MsysRoot"
+        Invoke-Checked -FilePath $bashPath -ArgumentList @('-lc', $command)
+    } finally {
+        foreach ($name in $savedEnv.Keys) {
+            if ($null -eq $savedEnv[$name]) {
+                Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+            } else {
+                Set-Item "Env:$name" $savedEnv[$name]
+            }
+        }
+    }
+}
+
+function Invoke-Build {
+    param(
+        [string]$ModeName,
+        [string]$ArchName,
+        [bool]$DisableAutoHeal = $false
+    )
+
+    $selectedBackend = Resolve-BuildBackend
+    Write-Info "Selected backend: $selectedBackend"
+    switch ($selectedBackend) {
+        'msys2' { Invoke-MsysBuild -ModeName $ModeName -ArchName $ArchName -DisableAutoHeal:$DisableAutoHeal }
+        'wsl' { Invoke-WslBuild -ModeName $ModeName -ArchName $ArchName -DisableAutoHeal:$DisableAutoHeal }
+        default { throw "Unsupported backend: $selectedBackend" }
+    }
 }
 
 function Install-Hap {
@@ -213,7 +363,7 @@ $ResolvedHdc = Resolve-HdcPath -RequestedPath $HdcPath
 
 switch ($Mode) {
     'doctor' {
-        Invoke-WslBuild -ModeName 'doctor' -ArchName $Arch
+        Invoke-Build -ModeName 'doctor' -ArchName $Arch
         Write-Info "HDC path: $ResolvedHdc"
         Write-Info 'Visible HDC targets:'
         $targets = @(Get-HdcTargets -ToolPath $ResolvedHdc)
@@ -225,7 +375,7 @@ switch ($Mode) {
     }
 
     'full' {
-        Invoke-WslBuild -ModeName 'full' -ArchName $Arch -DisableAutoHeal:$NoAutoHeal
+        Invoke-Build -ModeName 'full' -ArchName $Arch -DisableAutoHeal:$NoAutoHeal
         if (-not $SkipInstall) {
             $resolvedTarget = Resolve-Target -ToolPath $ResolvedHdc -RequestedTarget $Target
             Install-Hap -ToolPath $ResolvedHdc -ResolvedTarget $resolvedTarget
@@ -240,7 +390,7 @@ switch ($Mode) {
     }
 
     'incremental' {
-        Invoke-WslBuild -ModeName 'incremental' -ArchName $Arch -DisableAutoHeal:$NoAutoHeal
+        Invoke-Build -ModeName 'incremental' -ArchName $Arch -DisableAutoHeal:$NoAutoHeal
         if (-not $SkipInstall) {
             $resolvedTarget = Resolve-Target -ToolPath $ResolvedHdc -RequestedTarget $Target
             Install-Hap -ToolPath $ResolvedHdc -ResolvedTarget $resolvedTarget
@@ -255,7 +405,7 @@ switch ($Mode) {
     }
 
     'wine' {
-        Invoke-WslBuild -ModeName 'wine' -ArchName $Arch -DisableAutoHeal:$NoAutoHeal
+        Invoke-Build -ModeName 'wine' -ArchName $Arch -DisableAutoHeal:$NoAutoHeal
         if (-not $SkipInstall) {
             $resolvedTarget = Resolve-Target -ToolPath $ResolvedHdc -RequestedTarget $Target
             Install-Hap -ToolPath $ResolvedHdc -ResolvedTarget $resolvedTarget
@@ -270,7 +420,7 @@ switch ($Mode) {
     }
 
     'package' {
-        Invoke-WslBuild -ModeName 'package' -ArchName $Arch -DisableAutoHeal:$NoAutoHeal
+        Invoke-Build -ModeName 'package' -ArchName $Arch -DisableAutoHeal:$NoAutoHeal
         if (-not $SkipInstall) {
             $resolvedTarget = Resolve-Target -ToolPath $ResolvedHdc -RequestedTarget $Target
             Install-Hap -ToolPath $ResolvedHdc -ResolvedTarget $resolvedTarget

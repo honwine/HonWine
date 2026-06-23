@@ -4,17 +4,24 @@
 
 If the repo is new to you, read `docs/ONBOARDING.md` before using the commands below.
 
-### Windows host
+### Windows host, default MSYS2 backend
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps1 -Mode doctor -Arch x86_64
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps1 -Mode full -Arch x86_64 -Target 127.0.0.1:5555
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps1 -Mode incremental -Arch x86_64 -Target 127.0.0.1:5555
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\bootstrap_msys2.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps1 -Backend msys2 -Mode doctor -Arch x86_64
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps1 -Backend msys2 -Mode full -Arch x86_64 -Target 127.0.0.1:5555
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps1 -Backend msys2 -Mode incremental -Arch x86_64 -Target 127.0.0.1:5555
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps1 -Mode deploy -Target 127.0.0.1:5555
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps1 -Mode logs -Target 127.0.0.1:5555
 ```
 
-### WSL build-only
+### WSL fallback
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps1 -Backend wsl -Mode doctor -Arch x86_64
+```
+
+### Inner shell build-only
 
 ```bash
 bash scripts/rebuild_harmony.sh doctor x86_64
@@ -27,7 +34,7 @@ Swap `x86_64` for `arm64` or `all` when needed.
 
 ## When to use each mode
 
-- `full`: thirdparty changes, Wine changes, Box64 changes, SDK/env changes, or first build on a machine.
+- `full`: thirdparty changes, Wine changes, Box64 changes, SDK/env changes, or first build on a machine/backend.
 - `incremental`: `entry/` code, native glue, ArkTS, HNP layout, signing, or packaging changes. Missing prerequisite artifacts are auto-healed.
 - `package`: existing binaries are good; only HNP/HAP assembly changed. Missing prerequisite artifacts are auto-healed, so first use can become heavier than expected.
 - `deploy`: rebuild is unnecessary; current HAP only needs reinstalling.
@@ -43,7 +50,7 @@ Swap `x86_64` for `arm64` or `all` when needed.
 
 ## Validation checklist
 
-- `doctor` resolves `OHOS_SDK`, `HVIGORW`, `NODE_BIN`, `JAVA_BIN`, `HNPCLI`, `HDC`, and `CLANG`.
+- `doctor` resolves `HOST_SHELL`, `OHOS_SDK`, `HVIGORW`, `NODE_BIN`, `JAVA_BIN`, `HNPCLI`, `HDC`, and `CLANG`.
 - Target HNP exists for the requested arch.
 - Signed HAP exists.
 - `hdc install -r` succeeds.

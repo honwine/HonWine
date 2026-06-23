@@ -53,6 +53,20 @@ build_libffi() {
         local build="$NATIVE_BUILD/libffi"
         local ffi_host="${NATIVE_CPU}-unknown-linux-musl"
 
+        # Windows-synced trees may leave libffi text files with CRLF, which breaks WSL shell execution.
+        python3 - "$src" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for path in root.rglob("*"):
+    if not path.is_file():
+        continue
+    data = path.read_bytes()
+    if b"\0" in data or b"\r" not in data:
+        continue
+    path.write_bytes(data.replace(b"\r\n", b"\n"))
+PY
         mkdir -p "$build"
         cd "$build"
 

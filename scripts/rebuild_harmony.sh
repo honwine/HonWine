@@ -229,7 +229,7 @@ print_artifacts() {
 doctor() {
     local tool
 
-    for tool in git bash python3 perl java cmake ninja meson zip unzip; do
+    for tool in git bash python3 perl cmake ninja meson zip unzip; do
         need_cmd "$tool"
     done
     check_submodules
@@ -237,8 +237,15 @@ doctor() {
     # shellcheck disable=SC1091
     source "$ROOT/scripts/env.sh"
 
+    [ -x "$JAVA_BIN" ] || die "configured JAVA_BIN is not executable: $JAVA_BIN"
+    [ -x "$NODE_BIN" ] || die "configured NODE_BIN is not executable: $NODE_BIN"
+    [ -x "$HVIGORW" ] || die "configured HVIGORW is not executable: $HVIGORW"
+    [ -x "$HNPCLI" ] || die "configured HNPCLI is not executable: $HNPCLI"
+    [ -x "$HDC" ] || die "configured HDC is not executable: $HDC"
+
     log "root: $ROOT"
     log "arch: $ARCH"
+    printf 'HOST_SHELL=%s\n' "${HOST_SHELL:-unknown}"
     printf 'OHOS_SDK=%s\n' "$OHOS_SDK"
     printf 'OHOS_SDK_SOURCE=%s\n' "${OHOS_SDK_SOURCE:-}"
     printf 'HVIGORW=%s\n' "$HVIGORW"
@@ -251,7 +258,7 @@ doctor() {
     log "tool versions:"
     printf '  bash: %s\n' "$(bash --version | head -n 1)"
     printf '  python3: %s\n' "$(python3 --version 2>&1)"
-    printf '  java: %s\n' "$(java -version 2>&1 | head -n 1)"
+    printf '  java: %s\n' "$("$JAVA_BIN" -version 2>&1 | head -n 1)"
     printf '  cmake: %s\n' "$(cmake --version | head -n 1)"
     printf '  ninja: %s\n' "$(ninja --version)"
     printf '  meson: %s\n' "$(meson --version)"
@@ -278,7 +285,7 @@ Modes:
   package      hnp -> hap
 
 Notes:
-  - Run the whole build chain inside one WSL shell.
+  - Run the whole build chain inside one shell on the selected host backend.
   - Use full when thirdparty/Wine/sysroot changed.
   - Use incremental when ArkTS/native/package glue changed.
   - Pass --no-auto-heal when you want fail-fast incremental behavior instead of

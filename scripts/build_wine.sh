@@ -100,25 +100,118 @@ refresh_wine_configure() {
     )
 }
 
+configure_host_pkg() {
+    local pkg="$1"
+    local cflags_var="$2"
+    local libs_var="$3"
+    local header_var="$4"
+    local symbol_var="$5"
+    local soname_var="${6:-}"
+    local soname_value="${7:-}"
+
+    if ! command -v "$PKG_CONFIG_BIN" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    if ! "$PKG_CONFIG_BIN" --exists "$pkg" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    printf -v "$cflags_var" '%s' "$("$PKG_CONFIG_BIN" --cflags "$pkg")"
+    printf -v "$libs_var" '%s' "$("$PKG_CONFIG_BIN" --libs "$pkg")"
+    printf -v "$header_var" 'yes'
+    printf -v "$symbol_var" 'yes'
+    export "$cflags_var" "$libs_var" "$header_var" "$symbol_var"
+
+    if [ -n "$soname_var" ] && [ -n "$soname_value" ]; then
+        printf -v "$soname_var" '%s' "$soname_value"
+        export "$soname_var"
+    fi
+
+    return 0
+}
+
+disable_host_pkg() {
+    local header_var="$1"
+    local symbol_var="$2"
+    local cflags_var="$3"
+    local libs_var="$4"
+    local soname_var="${5:-}"
+
+    printf -v "$header_var" 'no'
+    printf -v "$symbol_var" 'no'
+    printf -v "$cflags_var" ''
+    printf -v "$libs_var" ''
+    export "$header_var" "$symbol_var" "$cflags_var" "$libs_var"
+
+    if [ -n "$soname_var" ]; then
+        printf -v "$soname_var" ''
+        export "$soname_var"
+    fi
+}
+
 build_native_tools() {
     log "--- Build native Wine tools ---"
     mkdir -p "$WINE_SRC/build-native"
     cd "$WINE_SRC/build-native"
     if [ ! -f "Makefile" ]; then
-        export ac_cv_header_wayland_client_h=yes
-        export ac_cv_lib_wayland_client_wl_display_connect=yes
-        export WAYLAND_CLIENT_CFLAGS="-I/usr/include"
-        export WAYLAND_CLIENT_LIBS="-L/usr/lib/x86_64-linux-gnu -lwayland-client"
-        export ac_cv_header_xkbcommon_xkbcommon_h=yes
-        export ac_cv_lib_xkbcommon_xkb_context_new=yes
-        export ac_cv_lib_soname_xkbcommon="libxkbcommon.so.0"
-        export XKBCOMMON_CFLAGS="-I/usr/include"
-        export XKBCOMMON_LIBS="-lxkbcommon"
-        export ac_cv_header_xkbcommon_xkbregistry_h=yes
-        export ac_cv_lib_xkbregistry_rxkb_context_new=yes
-        export ac_cv_lib_soname_xkbregistry="libxkbregistry.so.0"
-        export XKBREGISTRY_CFLAGS="-I/usr/include"
-        export XKBREGISTRY_LIBS="-lxkbregistry"
+        if configure_host_pkg \
+            wayland-client \
+            WAYLAND_CLIENT_CFLAGS \
+            WAYLAND_CLIENT_LIBS \
+            ac_cv_header_wayland_client_h \
+            ac_cv_lib_wayland_client_wl_display_connect \
+            ac_cv_lib_soname_wayland_client \
+            libwayland-client.so.0; then
+            log "Host Wayland support detected via pkg-config"
+        else
+            warn "Host Wayland support not found; disabling Wayland-dependent native Wine features"
+            disable_host_pkg \
+                ac_cv_header_wayland_client_h \
+                ac_cv_lib_wayland_client_wl_display_connect \
+                WAYLAND_CLIENT_CFLAGS \
+                WAYLAND_CLIENT_LIBS \
+                ac_cv_lib_soname_wayland_client
+        fi
+
+        if configure_host_pkg \
+            xkbcommon \
+            XKBCOMMON_CFLAGS \
+            XKBCOMMON_LIBS \
+            ac_cv_header_xkbcommon_xkbcommon_h \
+            ac_cv_lib_xkbcommon_xkb_context_new \
+            ac_cv_lib_soname_xkbcommon \
+            libxkbcommon.so.0; then
+            log "Host xkbcommon support detected via pkg-config"
+        else
+            warn "Host xkbcommon support not found; disabling xkbcommon-dependent native Wine features"
+            disable_host_pkg \
+                ac_cv_header_xkbcommon_xkbcommon_h \
+                ac_cv_lib_xkbcommon_xkb_context_new \
+                XKBCOMMON_CFLAGS \
+                XKBCOMMON_LIBS \
+                ac_cv_lib_soname_xkbcommon
+        fi
+
+        if configure_host_pkg \
+            xkbregistry \
+            XKBREGISTRY_CFLAGS \
+            XKBREGISTRY_LIBS \
+            ac_cv_header_xkbcommon_xkbregistry_h \
+            ac_cv_lib_xkbregistry_rxkb_context_new \
+            ac_cv_lib_soname_xkbregistry \
+            libxkbregistry.so.0; then
+            log "Host xkbregistry support detected via pkg-config"
+        else
+            warn "Host xkbregistry support not found; disabling xkbregistry-dependent native Wine features"
+            disable_host_pkg \
+                ac_cv_header_xkbcommon_xkbregistry_h \
+                ac_cv_lib_xkbregistry_rxkb_context_new \
+                XKBREGISTRY_CFLAGS \
+                XKBREGISTRY_LIBS \
+                ac_cv_lib_soname_xkbregistry
+        fi
+
         export WAYLAND_SCANNER="$WAYLAND_SCANNER"
         ../configure --enable-win64 --disable-tests \
             --without-x --without-freetype --without-alsa \

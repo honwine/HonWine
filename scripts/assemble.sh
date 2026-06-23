@@ -14,6 +14,43 @@ count_files() {
     find "$dir" -maxdepth 1 -type f | wc -l
 }
 
+path_newer_than_stamp() {
+    local stamp="$1"
+    local path="$2"
+
+    [ -e "$path" ] || return 1
+    [ -f "$stamp" ] || return 0
+
+    if [ -d "$path" ]; then
+        find "$path" -type f -newer "$stamp" -print -quit 2>/dev/null | grep -q .
+        return $?
+    fi
+
+    [ "$path" -nt "$stamp" ]
+}
+
+assemble_inputs_changed() {
+    local stamp="$1"
+    shift
+    local path=""
+
+    [ -f "$stamp" ] || return 0
+
+    for path in "$@"; do
+        if path_newer_than_stamp "$stamp" "$path"; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+write_assemble_stamp() {
+    local stamp="$1"
+    mkdir -p "$(dirname "$stamp")"
+    printf '%s\n' "$NATIVE_ARCH $DEVICE_TYPE $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$stamp"
+}
+
 copy_find_matches() {
     local src_root="$1"
     local dest="$2"
@@ -203,16 +240,67 @@ HKLM,%FontSubStr%,"Courier New",,"Noto Sans Mono"' "$wine_data/share/wine/wine.i
 
 log "=== Assemble layout ($NATIVE_ARCH, $DEVICE_TYPE) ==="
 
-if [ "$DEVICE_TYPE" = "pad" ]; then
-    assemble_pad
-    exit 0
-fi
-
 BIN="$HNP_LAYOUT/bin"
 UNIX_DIR="$BIN/x86_64-unix"
 WIN_DIR="$BIN/x86_64-windows"
 LIB_DIR="$HNP_LAYOUT/lib/x86_64"
 SHARE_WINE="$HNP_LAYOUT/share/wine"
+
+ASSEMBLE_STAMP="$OUT_DIR/.assemble-${DEVICE_TYPE}-${NATIVE_ARCH}.stamp"
+ASSEMBLE_PROBE="$HNP_LAYOUT/bin/wine"
+if [ "$DEVICE_TYPE" = "pad" ]; then
+    ASSEMBLE_PROBE="$STAGING_DIR/wine-data.zip"
+fi
+
+ASSEMBLE_INPUTS=(
+    "$WINE_SRC/build-ohos/loader/wine"
+    "$WINE_SRC/build-ohos/dlls"
+    "$WINE_SRC/build-ohos/programs"
+    "$WINE_SRC/fonts"
+    "$WINE_SRC/build-native/nls"
+    "$WINE_SRC/build-native/include"
+    "$WINE_SRC/build-native/loader/wine.inf"
+    "$SYSROOT/usr/lib/x86_64-linux-ohos/libc.so"
+    "$SYSROOT_EXT_LIB"
+    "$SYSROOT_EXT_SHARE/X11/xkb"
+    "$ROOT/assets/windows-media/Alarm01.wav"
+    "$ROOT/.temp/mmap_test"
+)
+if [ -f "$BUILD_DIR/wine_server/wineserver" ]; then
+    ASSEMBLE_INPUTS+=("$BUILD_DIR/wine_server/wineserver")
+elif [ -f "$WINE_SRC/build-ohos/server/wineserver" ]; then
+    ASSEMBLE_INPUTS+=("$WINE_SRC/build-ohos/server/wineserver")
+fi
+if [ -f "$BUILD_DIR/wine_server/libwineserver.so" ]; then
+    ASSEMBLE_INPUTS+=("$BUILD_DIR/wine_server/libwineserver.so")
+fi
+if [ "$NATIVE_ARCH" = "arm64-v8a" ]; then
+    ASSEMBLE_INPUTS+=(
+        "$BUILD_DIR/box64_build/box64"
+        "$SYSROOT_EXT/usr/lib/$NATIVE_TARGET"
+    )
+fi
+
+if [ -f "$ASSEMBLE_STAMP" ] && [ -e "$ASSEMBLE_PROBE" ] && ! assemble_inputs_changed "$ASSEMBLE_STAMP" "${ASSEMBLE_INPUTS[@]}"; then
+    log "HNP layout already up to date ($NATIVE_ARCH)"
+    echo
+    if [ "$DEVICE_TYPE" = "pad" ]; then
+        echo "  rawfile: $STAGING_DIR/wine-data.zip"
+    else
+        echo "  $BIN/"
+        echo "  core: wine, wineserver, box64"
+        echo "  ntdll.so: wine loader runtime"
+        echo "  x86_64-windows/: $(count_files "$WIN_DIR") files"
+        echo "  x86_64-unix/: $(count_files "$UNIX_DIR") files"
+    fi
+    exit 0
+fi
+
+if [ "$DEVICE_TYPE" = "pad" ]; then
+    assemble_pad
+    write_assemble_stamp "$ASSEMBLE_STAMP"
+    exit 0
+fi
 
 rm -rf "$STAGING_DIR"
 mkdir -p "$BIN" "$UNIX_DIR" "$WIN_DIR" "$LIB_DIR" \
@@ -340,3 +428,4 @@ echo "  core: wine, wineserver, box64"
 echo "  ntdll.so: wine loader runtime"
 echo "  x86_64-windows/: $(count_files "$WIN_DIR") files"
 echo "  x86_64-unix/: $(count_files "$UNIX_DIR") files"
+write_assemble_stamp "$ASSEMBLE_STAMP"

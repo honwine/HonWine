@@ -30,6 +30,20 @@ build_libffi() {
     if [ -f "$SYSROOT_EXT_LIB/libffi.so.8" ] && [ -f "$SYSROOT_EXT_INC/ffi.h" ]; then return 0; fi
 
     log "--- libffi ---"
+    # Windows-synced trees may leave libffi text files with CRLF, which breaks WSL shell execution.
+    python3 - "$src" <<'PY'
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+for path in root.rglob("*"):
+    if not path.is_file():
+        continue
+    data = path.read_bytes()
+    if b"\0" in data or b"\r" not in data:
+        continue
+    path.write_bytes(data.replace(b"\r\n", b"\n"))
+PY
     mkdir -p "$build" && cd "$build"
     "$src/autogen.sh" 2>/dev/null || true
     CC="$CLANG --target=$TARGET --sysroot=$SYSROOT" \
@@ -70,7 +84,7 @@ build_libxml2() {
         -DLIBXML2_WITH_FTP=OFF -DLIBXML2_WITH_MODULES=OFF \
         -DLIBXML2_WITH_LZMA=OFF -DLIBXML2_WITH_ZLIB=OFF -DLIBXML2_WITH_ICONV=OFF \
         -DCMAKE_INSTALL_PREFIX="$build/install"
-    cmake --build "$build"
+    cmake --build "$build" --parallel "$JOBS"
     cmake --install "$build"
     cp "$build/libxml2.so.2.12.0" "$SYSROOT_EXT_LIB/libxml2.so.2"
     cp "$build/libxml2.so.2.12.0" "$SYSROOT_EXT_LIB/libxml2.so"
@@ -99,7 +113,7 @@ build_xkbcommon() {
         -Denable-wayland=false -Denable-xkbregistry=true \
         -Denable-bash-completion=false -Denable-docs=false
 
-    ninja -C "$build" libxkbcommon.so.0.0.0 libxkbregistry.so.0.0.0
+    ninja -j"$JOBS" -C "$build" libxkbcommon.so.0.0.0 libxkbregistry.so.0.0.0
     cp "$build/libxkbcommon.so.0.0.0" "$SYSROOT_EXT_LIB/libxkbcommon.so"
     cp "$build/libxkbcommon.so.0.0.0" "$SYSROOT_EXT_LIB/libxkbcommon.so.0"
     cp "$build/libxkbregistry.so.0.0.0" "$SYSROOT_EXT_LIB/libxkbregistry.so"
