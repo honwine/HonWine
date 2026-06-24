@@ -219,16 +219,20 @@ static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
                                               int audioBootstrapFd) {
     std::string shareDir = binDir + "/../share";
     std::string xkbDir = shareDir + "/X11/xkb";
+    std::string runtimeLibPath = binDir + ":" + binDir + "/x86_64-unix:" + binDir + "/../lib/x86_64";
     std::vector<std::string> env = {
         "XDG_RUNTIME_DIR=" + sockDir,
         "WAYLAND_DISPLAY=" + sockName,
         "HOME=/storage/Users/currentUser/Download/app.hackeris.winehua",
         "WINEPREFIX=" WINE_PREFIX,
         "WINEDATADIR=" + shareDir + "/wine", // Wine 数据文件 (nls, wine.inf)
+        "WINEBINDIR=" + binDir,
+        "WINEUNIXDIR=" + binDir,
         "WINEDLLDIR=" + binDir + "/x86_64-unix", // Wine Unix .so
         "WINEDLLDIR0=" + binDir + "/x86_64-windows", // PE DLL 目录
         "WINEDLLDIR1=" + binDir,                      // PE EXE 目录
         "WINEDLLPATH=" + binDir + "/x86_64-windows:" + binDir, // PE DLL + EXE
+        "WINEDLLOVERRIDES=mscoree,mshtml=",
         // Box64 日志级别: 0=无 (3=DEBUG 会产生 300K+ 行 stderr, 拖慢初始化)
         "BOX64_LOG=0",
         "BOX64_NOBANNER=1",
@@ -256,10 +260,10 @@ static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
     // ARM64: x86_64 .so 由 Box64 加载，不在系统 LD_LIBRARY_PATH
     // LD_LIBRARY_PATH 只包含 ARM64 原生 .so
     env.push_back("LD_LIBRARY_PATH=" + libPath);
-    env.push_back("BOX64_LD_LIBRARY_PATH=" + binDir + "/x86_64-unix");
+    env.push_back("BOX64_LD_LIBRARY_PATH=" + runtimeLibPath);
 #else
     // x86_64: 系统 linker 直接加载 x86_64 OHOS .so
-    env.push_back("LD_LIBRARY_PATH=" + libPath + ":" + binDir + "/x86_64-unix");
+    env.push_back("LD_LIBRARY_PATH=" + runtimeLibPath);
 #endif
     return env;
 }
@@ -552,8 +556,24 @@ static bool IsWineserverSocketReady() {
     return found;
 }
 
+static bool IsWinePrefixReadyInternal() {
+    DIR* d = opendir(WINE_PREFIX "/drive_c");
+    if (!d) return false;
+
+    bool ready = false;
+    struct dirent* e = nullptr;
+    while ((e = readdir(d)) != nullptr) {
+        if (e->d_name[0] == '.') continue;
+        ready = true;
+        break;
+    }
+
+    closedir(d);
+    return ready;
+}
+
 static void LaunchThreadFunc(LaunchParams* p) {
-    OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver + wineboot + wine starting in background");
+    OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver + wineboot starting in background");
     OH_LOG_INFO(LOG_APP, "[Launch-Async] XKB_CONFIG_ROOT=%{public}s",
                 (p->winehuaBin + "/../share/X11/xkb").c_str());
 
@@ -603,7 +623,7 @@ static void LaunchThreadFunc(LaunchParams* p) {
         }
     }
 #else
-    // PC: fork + execve
+    // PC/x86_64: fork + execve native wineserver directly (no Box64 emulation)
     {
         std::vector<std::string> wsEnvStrs = p->envStrs;
         std::vector<char*> wsEnvp;
@@ -626,8 +646,8 @@ static void LaunchThreadFunc(LaunchParams* p) {
             for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
             prctl(PR_SET_NAME, "wl-wineserver", 0, 0, 0);
             chdir(p->winehuaBin.c_str());
-            const char* wsArgv[] = {"./box64", "./wineserver", nullptr};
-            execve("./box64", (char* const*)wsArgv, wsEnvp.data());
+            const char* wsArgv[] = {"./wineserver", nullptr};
+            execve("./wineserver", (char* const*)wsArgv, wsEnvp.data());
             _exit(127);
         }
         if (wsPid > 0) {
@@ -653,10 +673,6 @@ static void LaunchThreadFunc(LaunchParams* p) {
     }
 #endif
 
-    if (gStateTsfn) {
-        napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-starting"), napi_tsfn_blocking);
-    }
-
     // 启动 Process Broker（在主进程上下文监听请求，
     // 让 wineboot 内部的 spawn_process 可以通过 Unix socket 请求子进程创建）
     StartBrokerServer();
@@ -664,9 +680,20 @@ static void LaunchThreadFunc(LaunchParams* p) {
     // 设置 PROCESSBROKER 环境变量，所有 Wine 进程统一从 env 读取 broker socket 路径
     setenv("PROCESSBROKER", WINE_BROKER_SOCKET, 1);
 
+    bool prefixReady = IsWinePrefixReadyInternal();
+    if (prefixReady) {
+        OH_LOG_INFO(LOG_APP, "[Launch-Async] wine prefix already initialized, skipping wineboot");
+        if (audioBootstrapFd >= 0) {
+            close(audioBootstrapFd);
+            audioBootstrapFd = -1;
+        }
+    } else if (gStateTsfn) {
+        napi_call_threadsafe_function(gStateTsfn, strdup("wineboot-starting"), napi_tsfn_blocking);
+    }
+
 #ifdef PAD_MODE
     // -- wineboot --init via OH_Ability_StartNativeChildProcess --
-    {
+    if (!prefixReady) {
         OH_LOG_INFO(LOG_APP, "[Launch-Async] running wineboot --init via appspawn...");
 
 #ifdef __aarch64__
@@ -723,8 +750,8 @@ static void LaunchThreadFunc(LaunchParams* p) {
             OH_LOG_ERROR(LOG_APP, "[Launch-Async] wineboot FAILED ret=%{public}d", (int)ret);
     }
 #else
-    // -- wineboot --init (PC: fork + execve ./box64) --
-    {
+    // -- wineboot --init (PC/x86_64: fork + execve native wine) --
+    if (!prefixReady) {
         OH_LOG_INFO(LOG_APP, "[Launch-Async] running wineboot --init...");
         pid_t bootPid = fork();
         if (bootPid == 0) {
@@ -732,8 +759,8 @@ static void LaunchThreadFunc(LaunchParams* p) {
             for (int s = 1; s < 32; ++s) signal(s, SIG_DFL);
             prctl(PR_SET_NAME, "wl-wineboot", 0, 0, 0);
             chdir(p->winehuaBin.c_str());
-            const char* bootArgv[] = {"./box64", "./wine", "./wineboot", "--init", nullptr};
-            execve("./box64", (char* const*)bootArgv, p->envp.data());
+            const char* bootArgv[] = {"./wine", "wineboot", "--init", nullptr};
+            execve("./wine", (char* const*)bootArgv, p->envp.data());
             _exit(127);
         }
         if (audioBootstrapFd >= 0) {
@@ -744,6 +771,14 @@ static void LaunchThreadFunc(LaunchParams* p) {
             int bootStatus = 0;
             waitpid(bootPid, &bootStatus, 0);
             LogProcessExit("wineboot", bootPid, bootStatus);
+        }
+
+        if (!WaitFor("wine prefix drive_c", []() {
+            DIR* d = opendir(WINE_PREFIX "/drive_c");
+            if (d) { closedir(d); return true; }
+            return false;
+        }, 10000, 200)) {
+            OH_LOG_WARN(LOG_APP, "[Launch-Async] drive_c not ready after wineboot");
         }
     }
 #endif
@@ -910,7 +945,7 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
         }
     }
 #else
-    // PC: fork + execve
+    // PC/x86_64: fork + execve native wine directly (no Box64 emulation)
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         OH_LOG_ERROR(LOG_APP, "[Wine] pipe failed: %{public}s", strerror(errno));
@@ -927,8 +962,8 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
         prctl(PR_SET_NAME, "wl-client", 0, 0, 0);
         CloseInheritedFds({STDOUT_FILENO, STDERR_FILENO, audioBootstrapFd});
         chdir(binDir);
-        const char* cargv[] = {"./box64", "./wine", exePath.c_str(), nullptr};
-        execve("./box64", (char* const*)cargv, envp.data());
+        const char* cargv[] = {"./wine", exePath.c_str(), nullptr};
+        execve("./wine", (char* const*)cargv, envp.data());
         _exit(127);
     }
 
@@ -956,23 +991,7 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
 
 // -- NAPI: checkWinePrefix -- 检测 .wine/drive_c 是否已初始化且有内容 --
 static napi_value CheckWinePrefix(napi_env env, napi_callback_info info) {
-    const char *prefix = getenv("WINEPREFIX");
-    if (!prefix) prefix = WINE_PREFIX;
-    char drive_c[512];
-    snprintf(drive_c, sizeof(drive_c), "%s/drive_c", prefix);
-
-    bool ok = false;
-    DIR *d = opendir(drive_c);
-    if (d) {
-        struct dirent *e;
-        int count = 0;
-        while ((e = readdir(d)) != nullptr) {
-            if (e->d_name[0] == '.') continue;
-            count++;
-        }
-        closedir(d);
-        ok = (count > 0);
-    }
+    bool ok = IsWinePrefixReadyInternal();
     OH_LOG_INFO(LOG_APP, "[Wine] checkWinePrefix: drive_c ready=%{public}s", ok ? "yes" : "no");
     napi_value r;
     napi_get_boolean(env, ok, &r);
