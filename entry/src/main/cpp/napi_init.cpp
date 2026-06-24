@@ -4,6 +4,7 @@
 #include "input_manager.h"
 #include "egl_renderer.h"
 #include "wine_constants.h"
+#include "wine_env.h"
 
 #include <unistd.h>
 #include <signal.h>
@@ -187,17 +188,6 @@ static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
         "WINEDLLDIR1=" + binDir,                      // PE EXE 目录
         "WINEDLLPATH=" + binDir + "/x86_64-windows:" + binDir, // PE DLL + EXE
 #endif
-        // Box64 日志级别: 0=无 (3=DEBUG 会产生 300K+ 行 stderr, 拖慢初始化)
-        "BOX64_LOG=0",
-        "BOX64_NOBANNER=1",
-        "BOX64_SHOWSEGV=1",
-        // Box64 DYNAREC 性能调优 (对标 Winlator Performance 预设)
-        "BOX64_DYNAREC_SAFEFLAGS=0",
-        "BOX64_DYNAREC_BIGBLOCK=3",
-        "BOX64_DYNAREC_CALLRET=2",
-        "BOX64_DYNAREC_FORWARD=1024",
-        "BOX64_DYNAREC_WEAKBARRIER=2",
-        "BOX64_AVX=0",
         // Wine 调试通道: -all=关闭全部 (+wineboot,+module 等会产生大量 trace)
         "WINEDEBUG=-all",
         "WINE_MONO=never",  // 跳过 Mono 安装 (OHOS 无网络, 会卡住)
@@ -205,6 +195,7 @@ static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
         "PATH=/usr/local/bin:/data/app/bin:/data/service/hnp/bin:/usr/bin:/vendor/bin:" + binDir + "/x86_64-windows:" + binDir,
         "TMPDIR=" WINE_TMPDIR,
     };
+    AppendBox64PerfStrings(env);
 #ifdef __aarch64__
     // ARM64: x86_64 .so 由 Box64 加载，不在系统 LD_LIBRARY_PATH
     // LD_LIBRARY_PATH 只包含 ARM64 原生 .so

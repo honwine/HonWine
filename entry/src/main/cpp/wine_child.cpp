@@ -22,6 +22,7 @@
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include "wine_constants.h"
+#include "wine_env.h"
 #include <fcntl.h>
 #include <pthread.h>
 #include <time.h>
@@ -92,22 +93,7 @@ static void setup_wine_env(const char* binDir)
     setenv("WINEDLLDIR1", binDir, 1);
     setenv("WINEDLLPATH", (std::string(binDir) + "/x86_64-windows:" + binDir).c_str(), 1);
     // Box64 日志: 0=关闭 (3=DEBUG 会产生海量 I/O)
-    setenv("BOX64_LOG", "0", 1);
-    setenv("BOX64_NOBANNER", "1", 1);
-    setenv("BOX64_SHOWSEGV", "1", 1);
-    // Box64 DYNAREC 性能调优 (对标 Winlator Performance 预设)
-    // SAFEFLAGS=0: 不保留 x86 flags, 用原生 ARM flags, 最大提速
-    setenv("BOX64_DYNAREC_SAFEFLAGS", "0", 1);
-    // BIGBLOCK=3: 最大翻译块 (更多优化机会, 更少跳转)
-    setenv("BOX64_DYNAREC_BIGBLOCK", "3", 1);
-    // CALLRET=2: 用 ARM 原生 call/ret 代替模拟
-    setenv("BOX64_DYNAREC_CALLRET", "2", 1);
-    // FORWARD=1024: 最大推测执行步数
-    setenv("BOX64_DYNAREC_FORWARD", "1024", 1);
-    // WEAKBARRIER=2: 最弱化内存屏障 (x86_64 Wine 无需强序)
-    setenv("BOX64_DYNAREC_WEAKBARRIER", "2", 1);
-    // AVX=0: 禁用 AVX (Wine 不用 SIMD, 省去翻译)
-    setenv("BOX64_AVX", "0", 1);
+    SetBox64PerfEnv();
 #ifdef __aarch64__
     // 标记 Box64 in-process 模式，供 x86_64 wine 代码 (process.c) 运行时判断
     setenv("USE_LIBBOX64", "1", 1);
@@ -322,15 +308,7 @@ extern "C" void WineserverMain(NativeChildProcess_Args args)
     // Box64 env for wineserver (x86_64 wineserver ELF inside Box64).
     std::string libDir = std::string(binDir) + "/x86_64-unix";
     setenv("BOX64_LD_LIBRARY_PATH", libDir.c_str(), 1);
-    setenv("BOX64_LOG", "0", 1);
-    setenv("BOX64_NOBANNER", "1", 1);
-    setenv("BOX64_SHOWSEGV", "1", 1);
-    setenv("BOX64_DYNAREC_SAFEFLAGS", "0", 1);
-    setenv("BOX64_DYNAREC_BIGBLOCK", "3", 1);
-    setenv("BOX64_DYNAREC_CALLRET", "2", 1);
-    setenv("BOX64_DYNAREC_FORWARD", "1024", 1);
-    setenv("BOX64_DYNAREC_WEAKBARRIER", "2", 1);
-    setenv("BOX64_AVX", "0", 1);
+    SetBox64PerfEnv();
 
     // Build argv: ["box64", "/path/to/wineserver", "wineserver", "-f", "-p"]
     std::string wsPath = std::string(binDir) + "/wineserver";
