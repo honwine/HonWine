@@ -9,7 +9,7 @@
     "externalNativeOptions": {
       "path": "./src/main/cpp/CMakeLists.txt",
       "arguments": "",
-      "cppFlags": "-DPAD_MODE -DPAD_MODE -DPAD_MODE -DPAD_MODE -DPAD_MODE -DPAD_MODE -DPAD_MODE ",
+      "cppFlags": "-DPAD_MODE",
       "abiFilters": ["arm64-v8a"]
     }
   },
