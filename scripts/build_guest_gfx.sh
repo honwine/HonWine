@@ -179,7 +179,7 @@ find_runtime_lib_dir() {
 git_metadata_value() {
     local repo_root="$1"
     shift
-    git -C "$repo_root" "$@" 2>/dev/null | head -n 1 || true
+    git -c "safe.directory=$repo_root" -C "$repo_root" "$@" 2>/dev/null | head -n 1 || true
 }
 
 append_git_source_info() {

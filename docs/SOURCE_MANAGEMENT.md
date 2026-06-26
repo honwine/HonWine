@@ -16,11 +16,11 @@
 
 | 组件 | 本地路径 | GitHub 仓库 | 上游基线 | 管理方式 | 当前状态 |
 | --- | --- | --- | --- | --- | --- |
-| Wine | `thirdparty/wine` | `winehua/wine` | Wine upstream | fork + submodule | 已存在 |
+| Wine | `thirdparty/wine` | `yifengling0/wine-1` (临时) / `winehua/wine` (目标) | Wine upstream | fork + submodule | 当前主仓库先指向个人 fork，待迁回 `winehua/wine` |
 | Box64 | `thirdparty/box64` | `winehua/box64` | Box64 upstream | fork + submodule | 已存在 |
-| virglrenderer | `thirdparty/virglrenderer` | `winehua/virglrenderer` | freedesktop virglrenderer | fork + submodule | 需要创建远端 |
-| Mesa (OHOS guest_gfx) | `thirdparty/mesa-ohos` | `winehua/mesa-ohos` | `openharmony/third_party_mesa3d` | fork + submodule | 需要创建远端 |
-| libdrm (OHOS guest_gfx) | `thirdparty/libdrm-ohos` | `winehua/libdrm-ohos` | `openharmony/third_party_libdrm` | fork + submodule | 需要创建远端 |
+| virglrenderer | `thirdparty/virglrenderer` | `winehua/virglrenderer` | freedesktop virglrenderer | fork + submodule | 已存在 |
+| Mesa (OHOS guest_gfx) | `thirdparty/mesa-ohos` | `winehua/mesa-ohos` | `openharmony/third_party_mesa3d` | fork + submodule | 已存在 |
+| libdrm (OHOS guest_gfx) | `thirdparty/libdrm-ohos` | `winehua/libdrm-ohos` | `openharmony/third_party_libdrm` | fork + submodule | 已存在 |
 
 其余 `wayland / wayland-protocols / libxkbcommon / freetype / libffi / libxml2 / xkeyboard-config` 暂时继续跟随上游，无项目定制补丁时不额外 fork。
 
@@ -81,7 +81,7 @@ bash scripts/fetch_ohos_mesa.sh \
 
 ## GitHub 组织侧建议
 
-建议在 `https://github.com/winehua` 下补齐这三个仓库：
+`https://github.com/winehua` 下已经补齐这三个仓库：
 
 - `virglrenderer`
 - `mesa-ohos`

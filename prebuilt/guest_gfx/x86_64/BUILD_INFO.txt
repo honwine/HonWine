@@ -1,5 +1,13 @@
-source=/mnt/d/Work/WineHua/out/guest_gfx_install/x86_64
+source=/d/Work/WineHua/out/guest_gfx_install/x86_64
 mode=virpipe
-platform=unknown
+platform=wayland
 arch=x86_64
-built_at=2026-06-25T08:58:28Z
+built_at=2026-06-26T13:35:15Z
+mesa_source_root=/d/Work/WineHua/thirdparty/mesa-ohos
+mesa_git_head=cb86f528601fcb7fdc1018400b1375e6c8c6354c
+mesa_git_branch=main
+mesa_git_remote=https://github.com/winehua/mesa-ohos.git
+libdrm_source_root=/d/Work/WineHua/thirdparty/libdrm-ohos
+libdrm_git_head=bdd6856d4a488121c120237c2b7c33b17f6a1df1
+libdrm_git_branch=main
+libdrm_git_remote=https://github.com/winehua/libdrm-ohos.git
