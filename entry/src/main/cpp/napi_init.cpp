@@ -389,7 +389,7 @@ static void LaunchThreadFunc(LaunchParams* p) {
 #ifdef PAD_MODE
     {
         // -f: 前台模式, -p: 持久模式 (无客户端也不退出，避免竞态)
-        std::string wsEntryParams = p->winehuaBin + "|wineserver|-f|-p";
+        std::string wsEntryParams = p->winehuaBin + "|wineserver|-f|-p|--no-auto-close";
         OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver args=%{public}s", wsEntryParams.c_str());
         NativeChildProcess_Args wsArgs = {};
         wsArgs.entryParams = const_cast<char*>(wsEntryParams.c_str());
