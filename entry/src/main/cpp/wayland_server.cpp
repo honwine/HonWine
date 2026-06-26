@@ -462,9 +462,27 @@ void WaylandServer::surface_commit(wl_client*, wl_resource* surfRes) {
                     self->SetDesktopRootToplevelId(sd->toplevelId);
                     self->FireToplevelEvent(sd->toplevelId, "desktop_root", "{}");
                     rootId = sd->toplevelId;
+                } else if (!sd->title.empty()) {
+                    // 已有 root, 但新 toplevel 有 title → 检查是否需要切换
+                    // 首次启动时 explorer 先创建空 title 临时窗口, 真正桌面后到
+                    wl_resource* oldSurf = self->GetSurfaceForToplevel(rootId);
+                    auto* oldSd = oldSurf ? static_cast<SurfaceData*>(wl_resource_get_user_data(oldSurf)) : nullptr;
+                    if (oldSd && oldSd->title.empty()) {
+                        // 当前 root 是空 title 临时窗口 → 切换 root 到真正桌面
+                        OH_LOG_INFO(LOG_APP, "[MW] root switch: #%{public}u (empty) -> #%{public}u (%{public}s)",
+                                    rootId, sd->toplevelId, sd->title.c_str());
+                        self->backgroundLayers_.insert(rootId);
+                        PluginManager::GetInstance()->MoveRendererToToplevel(rootId, sd->toplevelId);
+                        self->SetDesktopRootToplevelId(sd->toplevelId);
+                        self->FireToplevelEvent(sd->toplevelId, "desktop_root", "{}");
+                        rootId = sd->toplevelId;
+                    } else {
+                        OH_LOG_INFO(LOG_APP, "[MW] extra full-size toplevel #%{public}u -> background layer (root stays #%{public}u)",
+                                    sd->toplevelId, rootId);
+                        self->backgroundLayers_.insert(sd->toplevelId);
+                    }
                 } else {
-                    // 已有 root, 新全尺寸 toplevel 作为渲染背景层, 不切换 root
-                    // (切换会导致菜单/任务栏无法点击 — 旧 root 有完整子窗口树)
+                    // 已有 root, 新全尺寸 toplevel 无 title → 渲染背景层
                     OH_LOG_INFO(LOG_APP, "[MW] extra full-size toplevel #%{public}u -> background layer (root stays #%{public}u)",
                                 sd->toplevelId, rootId);
                     self->backgroundLayers_.insert(sd->toplevelId);

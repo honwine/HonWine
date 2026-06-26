@@ -35,6 +35,12 @@ export default class DesktopAbility extends UIAbility {
     hilog.info(DOMAIN, TAG, '[DWA] onForeground tl=%{public}d', this.toplevelId);
   }
 
+  onNewWant(want: Want): void {
+    const newId = Number(want.parameters?.toplevelId) || 0;
+    hilog.info(DOMAIN, TAG, '[DWA] onNewWant tl: %{public}d -> %{public}d', this.toplevelId, newId);
+    this.toplevelId = newId;
+  }
+
   onBackground(): void {
     hilog.info(DOMAIN, TAG, '[DWA] onBackground tl=%{public}d', this.toplevelId);
   }

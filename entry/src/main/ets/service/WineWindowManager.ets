@@ -561,11 +561,10 @@ export class WineWindowManager {
 
   // Desktop 模式: 打开 DesktopAbility
   private startDesktopAbility(rootId: number): void {
-    if (this.desktopAbilityRunning) {
-      hilog.info(DOMAIN, TAG, '[MW] DesktopAbility already running, skip');
-      return;
+    // singleton 模式: 重复 startAbility 不会创建新实例, 只会触发 onNewWant
+    if (!this.desktopAbilityRunning) {
+      this.desktopAbilityRunning = true;
     }
-    this.desktopAbilityRunning = true;
     try {
       const want: Want = {
         bundleName: 'app.hackeris.winehua',
