@@ -1,9 +1,9 @@
 [submodule "thirdparty/wine"]
 	path = thirdparty/wine
-	url = git@github.com:winehua/wine.git
+	url = https://github.com/winehua/wine.git
 [submodule "thirdparty/box64"]
 	path = thirdparty/box64
-	url = git@github.com:winehua/box64.git
+	url = https://github.com/winehua/box64.git
 [submodule "thirdparty/wayland"]
 	path = thirdparty/wayland
 	url = https://gitlab.freedesktop.org/wayland/wayland.git
@@ -25,3 +25,6 @@
 [submodule "thirdparty/xkeyboard-config"]
 	path = thirdparty/xkeyboard-config
 	url = https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config.git
+[submodule "thirdparty/virglrenderer"]
+	path = thirdparty/virglrenderer
+	url = https://github.com/winehua/virglrenderer.git
