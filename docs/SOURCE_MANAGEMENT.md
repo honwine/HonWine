@@ -16,7 +16,7 @@
 
 | 组件 | 本地路径 | GitHub 仓库 | 上游基线 | 管理方式 | 当前状态 |
 | --- | --- | --- | --- | --- | --- |
-| Wine | `thirdparty/wine` | `winehua/wine` | Wine upstream | fork + submodule | 已迁回组织仓库，当前集成分支为 `dev` |
+| Wine | `thirdparty/wine` | `winehua/wine` | Wine upstream | fork + submodule | 当前主线回到 `winehua/wine:dev`，`wine-1/ohos-port` 仅作历史参考 |
 | Box64 | `thirdparty/box64` | `winehua/box64` | Box64 upstream | fork + submodule | 已存在 |
 | virglrenderer | `thirdparty/virglrenderer` | `winehua/virglrenderer` | freedesktop virglrenderer | fork + submodule | 已存在 |
 | Mesa (OHOS guest_gfx) | `thirdparty/mesa-ohos` | `winehua/mesa-ohos` | `openharmony/third_party_mesa3d` | fork + submodule | 已存在 |

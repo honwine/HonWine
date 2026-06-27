@@ -52,6 +52,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps
 ## 图形相关
 
 - GL / VirGL Step 1 设计与改动说明见 [docs/OPENGL_VIRGL_DESIGN.md](docs/OPENGL_VIRGL_DESIGN.md)
+- GL 产物来源 / 代码对应 / 复现命令见 [docs/GL_ARTIFACTS_AND_REPRO.md](docs/GL_ARTIFACTS_AND_REPRO.md)
+- VirGL 显示优化路线与后续任务拆分见 [docs/virgl_display_optimization_guide.md](docs/virgl_display_optimization_guide.md)
 - guest 3D receiver bundle 说明见 [prebuilt/guest_gfx/README.md](prebuilt/guest_gfx/README.md)
 - 图形相关 fork / submodule 管理约定见 [docs/SOURCE_MANAGEMENT.md](docs/SOURCE_MANAGEMENT.md)
 - 当前图形方案强调复用 Wine 现有 `WGL/EGL + winewayland.drv` 路径，不要求 Windows 应用做适配
@@ -64,6 +66,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\rebuild_harmony.ps
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): 总体架构
 - [docs/AUDIO_ARCHITECTURE.md](docs/AUDIO_ARCHITECTURE.md): 音频方案
 - [docs/OPENGL_VIRGL_DESIGN.md](docs/OPENGL_VIRGL_DESIGN.md): OpenGL / VirGL Step 1 设计资料
+- [docs/GL_ARTIFACTS_AND_REPRO.md](docs/GL_ARTIFACTS_AND_REPRO.md): GL 产物来源与复现资料
+- [docs/virgl_display_optimization_guide.md](docs/virgl_display_optimization_guide.md): VirGL 显示优化路线资料
 - [docs/README.md](docs/README.md): 文档索引
 
 ## 目录概览

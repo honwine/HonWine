@@ -10,6 +10,8 @@
 - [ARCHITECTURE.md](ARCHITECTURE.md): WineHua 总体架构
 - [AUDIO_ARCHITECTURE.md](AUDIO_ARCHITECTURE.md): 音频链路设计
 - [OPENGL_VIRGL_DESIGN.md](OPENGL_VIRGL_DESIGN.md): OpenGL / VirGL Step 1 设计、现状、待办、代码改动归档
+- [GL_ARTIFACTS_AND_REPRO.md](GL_ARTIFACTS_AND_REPRO.md): GL 产物来源、代码归属、复现命令和当前卡项
+- [virgl_display_optimization_guide.md](virgl_display_optimization_guide.md): VirGL 显示链路优化路线、Presenter 抽象和后续任务拆分
 
 ## 当前默认入口
 
