@@ -10,6 +10,7 @@ FT_BUILD="$BUILD_DIR/freetype_build"
 log "=== 构建 FreeType (x86_64) ==="
 
 if [ -f "$SYSROOT_EXT_LIB/libfreetype.so.6" ] \
+   && [ -f "$SYSROOT_EXT_LIB/libfreetype.so" ] \
    && [ -d "$SYSROOT_EXT_INC/freetype2" ] \
    && [ -f "$SYSROOT_EXT_PC/freetype2.pc" ]; then
     log "FreeType 已就绪，跳过"
@@ -40,6 +41,7 @@ ninja install
 
 # 安装到 sysroot-ext (文件名 = SONAME)
 cp "$FT_BUILD"/install/lib/libfreetype.so.6.20.2 "$SYSROOT_EXT_LIB/libfreetype.so.6"
+ln -sf libfreetype.so.6 "$SYSROOT_EXT_LIB/libfreetype.so"
 cp -r "$FT_BUILD"/install/include/freetype2 "$SYSROOT_EXT_INC/"
 cat > "$SYSROOT_EXT_PC/freetype2.pc" << EOF
 prefix=$SYSROOT_EXT/usr

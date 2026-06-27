@@ -31,10 +31,10 @@ build_native_tools() {
         export XKBREGISTRY_LIBS="-lxkbregistry"
         export WAYLAND_SCANNER=/usr/local/bin/wayland-scanner
         ../configure --enable-win64 --disable-tests \
-            --without-x --without-freetype --without-alsa \
+            --without-x --without-alsa \
             --without-opengl --without-vulkan
     fi
-    make -k -j$JOBS || true
+    make -j$JOBS
 }
 
 build_ohos_unix() {
@@ -67,7 +67,9 @@ build_ohos_unix() {
         export XKBREGISTRY_LIBS="-L$SYSROOT_EXT_LIB -lxkbregistry"
         export WAYLAND_SCANNER=/usr/local/bin/wayland-scanner
 
-        CC="gcc" ../configure \
+        CC="$CLANG --target=$TARGET --sysroot=$SYSROOT" \
+        LDFLAGS="-fuse-ld=lld --sysroot=$SYSROOT --target=$TARGET -L$SYSROOT_EXT_LIB" \
+        ../configure \
             --host=x86_64-linux-ohos \
             --prefix=/opt/winehua \
             --libdir='${prefix}' \
@@ -76,14 +78,20 @@ build_ohos_unix() {
             --disable-tests \
             --without-x --without-alsa \
             --without-opengl --without-vulkan
-        sed -i 's/#define HAVE_LINUX_NTSYNC_H 1/\/\* OHOS \*\/\n#undef HAVE_LINUX_NTSYNC_H/' include/config.h
-        sed -i 's/#define HAVE_NETIPX_IPX_H 1/\/\* OHOS \*\/\n#undef HAVE_NETIPX_IPX_H/' include/config.h
     fi
 
-    make -k -j$JOBS \
+    make -j$JOBS \
         CC="$CLANG --target=$TARGET --sysroot=$SYSROOT" \
         CFLAGS="$WINE_CFLAGS -I$SYSROOT_EXT_INC -I$SYSROOT_EXT_INC/freetype2" \
-        LDFLAGS="-fuse-ld=lld --sysroot=$SYSROOT --target=$TARGET -L$SYSROOT_EXT_LIB" || true
+        LDFLAGS="-fuse-ld=lld --sysroot=$SYSROOT --target=$TARGET -L$SYSROOT_EXT_LIB"
+
+    # 验证关键 .so 已成功链接（make -k 可能静默跳过链接失败）
+    for pair in "winewayland.drv/winewayland.so" "wineohos.drv/wineohos.so" \
+                "win32u/win32u.so" "ntdll/ntdll.so"; do
+        if [ ! -f "dlls/$pair" ]; then
+            warn "关键 .so 缺失: dlls/$pair (链接可能失败，检查 sysroot-ext)"
+        fi
+    done
 }
 
 build_wineserver() {

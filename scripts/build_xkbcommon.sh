@@ -7,10 +7,14 @@ source "$SCRIPT_DIR/env.sh"
 log "=== 构建 xkbcommon 依赖 (x86_64) ==="
 
 if [ -f "$SYSROOT_EXT_LIB/libxkbcommon.so.0" ] \
+   && [ -f "$SYSROOT_EXT_LIB/libxkbcommon.so" ] \
    && [ -f "$SYSROOT_EXT_LIB/libxkbregistry.so.0" ] \
+   && [ -f "$SYSROOT_EXT_LIB/libxkbregistry.so" ] \
    && [ -f "$SYSROOT_EXT_LIB/libffi.so.8" ] \
+   && [ -f "$SYSROOT_EXT_LIB/libffi.so" ] \
    && [ -f "$SYSROOT_EXT_PC/libffi.pc" ] \
    && [ -f "$SYSROOT_EXT_LIB/libxml2.so.2" ] \
+   && [ -f "$SYSROOT_EXT_LIB/libxml2.so" ] \
    && [ -f "$SYSROOT_EXT_PC/libxml-2.0.pc" ] \
    && [ -d "$SYSROOT_EXT_INC/xkbcommon" ] \
    && [ -f "$SYSROOT_EXT_PC/xkbcommon.pc" ]; then
@@ -24,12 +28,12 @@ mkdir -p "$SYSROOT_EXT_INC" "$SYSROOT_EXT_LIB" "$SYSROOT_EXT_PC"
 build_libffi() {
     local src="$ROOT/thirdparty/libffi"
     local build="$BUILD_DIR/libffi_build"
-    if [ -f "$SYSROOT_EXT_LIB/libffi.so.8" ] && [ -f "$SYSROOT_EXT_INC/ffi.h" ]; then return 0; fi
+    if [ -f "$SYSROOT_EXT_LIB/libffi.so.8" ] && [ -f "$SYSROOT_EXT_LIB/libffi.so" ] && [ -f "$SYSROOT_EXT_INC/ffi.h" ]; then return 0; fi
 
     log "--- libffi ---"
     mkdir -p "$build" && cd "$build"
     "$src/autogen.sh" 2>/dev/null || true
-    CC="/apps/harmony/sdk/default/openharmony/native/llvm/bin/clang --target=$TARGET --sysroot=$SYSROOT" \
+    CC="$CLANG --target=$TARGET --sysroot=$SYSROOT" \
     CFLAGS="-O2 -fPIC -D__MUSL__" \
     LDFLAGS="-fuse-ld=lld" \
     "$src/configure" --host=x86_64-linux-gnu --prefix="$build/install" --disable-docs
@@ -53,7 +57,7 @@ EOF
 build_libxml2() {
     local src="$ROOT/thirdparty/libxml2"
     local build="$BUILD_DIR/libxml2_build"
-    if [ -f "$SYSROOT_EXT_LIB/libxml2.so.2" ] && [ -d "$SYSROOT_EXT_INC/libxml" ] && [ -f "$SYSROOT_EXT_PC/libxml-2.0.pc" ]; then return 0; fi
+    if [ -f "$SYSROOT_EXT_LIB/libxml2.so.2" ] && [ -d "$SYSROOT_EXT_INC/libxml" ] && [ -f "$SYSROOT_EXT_PC/libxml-2.0.pc" ] && [ -f "$SYSROOT_EXT_LIB/libxml2.so" ]; then return 0; fi
 
     log "--- libxml2 ---"
     cmake -S "$src" -B "$build" -GNinja \
@@ -68,6 +72,7 @@ build_libxml2() {
     cmake --build "$build"
     cmake --install "$build"
     cp "$build/libxml2.so.2.12.0" "$SYSROOT_EXT_LIB/libxml2.so.2"
+    ln -sf libxml2.so.2 "$SYSROOT_EXT_LIB/libxml2.so"
     cp -r "$build/install/include/libxml2/libxml" "$SYSROOT_EXT_INC/"
     cat > "$SYSROOT_EXT_PC/libxml-2.0.pc" << EOF
 prefix=$SYSROOT_EXT/usr
@@ -97,6 +102,8 @@ build_xkbcommon() {
     DESTDIR=/tmp/xkc ninja -C "$build" install
     find /tmp/xkc -name "libxkbcommon.so.0.0.0" -exec cp {} "$SYSROOT_EXT_LIB/libxkbcommon.so.0" \;
     find /tmp/xkc -name "libxkbregistry.so.0.0.0" -exec cp {} "$SYSROOT_EXT_LIB/libxkbregistry.so.0" \;
+    ln -sf libxkbcommon.so.0 "$SYSROOT_EXT_LIB/libxkbcommon.so"
+    ln -sf libxkbregistry.so.0 "$SYSROOT_EXT_LIB/libxkbregistry.so"
     find /tmp/xkc -path "*/include/xkbcommon" -type d | while read d; do
         cp -r "$d" "$SYSROOT_EXT_INC/"
     done

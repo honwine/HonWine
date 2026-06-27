@@ -9,6 +9,7 @@ log "=== 构建模拟层交叉编译依赖 (Wine用, x86_64-linux-ohos) → sysr
 
 # 按依赖链顺序执行 (模拟层依赖, 始终 x86_64-linux-ohos)
 bash "$SCRIPT_DIR/build_freetype.sh"
+bash "$SCRIPT_DIR/build_libffi.sh"
 bash "$SCRIPT_DIR/build_wayland.sh"
 bash "$SCRIPT_DIR/build_xkbcommon.sh"
 # XKB 键盘布局数据 (xkeyboard-config, Wine 键盘驱动依赖, 架构无关)

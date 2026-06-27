@@ -24,6 +24,7 @@ build_scanner() {
 log "=== 构建 Wayland (x86_64) ==="
 
 if [ -f "$SYSROOT_EXT_LIB/libwayland-client.so.0" ] \
+   && [ -f "$SYSROOT_EXT_LIB/libwayland-client.so" ] \
    && [ -f "$SYSROOT_EXT_INC/wayland-client.h" ] \
    && [ -f "$SYSROOT_EXT_PC/wayland-client.pc" ]; then
     log "Wayland 已就绪，跳过"
@@ -43,12 +44,15 @@ ninja -C "$WL_BUILD/x86_64"
 # 安装 .so (文件名 = SONAME)
 cp "$WL_BUILD/x86_64/src/libwayland-client.so.0.22.0" "$SYSROOT_EXT_LIB/libwayland-client.so.0"
 cp "$WL_BUILD/x86_64/src/libwayland-server.so.0.22.0" "$SYSROOT_EXT_LIB/libwayland-server.so.0"
+ln -sf libwayland-client.so.0 "$SYSROOT_EXT_LIB/libwayland-client.so"
+ln -sf libwayland-server.so.0 "$SYSROOT_EXT_LIB/libwayland-server.so"
 
 # 头文件
 cp "$WL_SRC/src/wayland-client.h" \
    "$WL_SRC/src/wayland-client-core.h" \
    "$WL_SRC/src/wayland-util.h" \
    "$WL_BUILD/x86_64/src/wayland-client-protocol.h" \
+   "$WL_BUILD/x86_64/src/wayland-version.h" \
    "$SYSROOT_EXT_INC/"
 
 # 2. wayland-protocols
