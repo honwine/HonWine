@@ -11,8 +11,8 @@ WINE_CFLAGS="-g -O2 -D__MUSL__ -D_GNU_SOURCE -D__ANDROID__ -D__OHOS__ -DWINE_UNI
 
 build_native_tools() {
     log "--- Native 构建 (winegcc + PE DLLs) ---"
-    mkdir -p "$WINE_SRC/build-native"
-    cd "$WINE_SRC/build-native"
+    mkdir -p "$BUILD_DIR/wine-native"
+    cd "$BUILD_DIR/wine-native"
     if [ ! -f "Makefile" ]; then
         # 用 cache variables 模拟 Wayland 检测, 避免在 host 上安装 libwayland-dev 等
         export ac_cv_header_wayland_client_h=yes
@@ -30,7 +30,7 @@ build_native_tools() {
         export XKBREGISTRY_CFLAGS="-I/usr/include"
         export XKBREGISTRY_LIBS="-lxkbregistry"
         export WAYLAND_SCANNER=/usr/local/bin/wayland-scanner
-        ../configure --enable-win64 --disable-tests \
+        "$WINE_SRC/configure" --enable-win64 --disable-tests \
             --without-x --without-alsa \
             --without-opengl --without-vulkan
     fi
@@ -40,8 +40,8 @@ build_native_tools() {
 build_ohos_unix() {
     log "--- OHOS 交叉编译 (Unix .so) ---"
 
-    mkdir -p "$WINE_SRC/build-ohos"
-    cd "$WINE_SRC/build-ohos"
+    mkdir -p "$BUILD_DIR/wine-ohos"
+    cd "$BUILD_DIR/wine-ohos"
 
     # 检查是否需要重新 configure (FreeType/Wayland 启用/禁用 状态变更)
     if [ ! -f "Makefile" ] || ! grep -q '#define SONAME_LIBFREETYPE' include/config.h 2>/dev/null \
@@ -72,11 +72,11 @@ build_ohos_unix() {
         LDFLAGS="-fuse-ld=lld --sysroot=$SYSROOT --target=$TARGET -L$SYSROOT_EXT_LIB" \
         PKG_CONFIG=/usr/bin/pkg-config \
         PKG_CONFIG_PATH="$SYSROOT_EXT_PC" \
-        ../configure \
+        "$WINE_SRC/configure" \
             --host=x86_64-linux-ohos \
             --prefix=/opt/winehua \
             --libdir='${prefix}' \
-            --with-wine-tools=../build-native \
+            --with-wine-tools="$BUILD_DIR/wine-native" \
             --with-mingw=gcc \
             --disable-tests \
             --without-x --without-alsa \
@@ -109,7 +109,7 @@ build_wineserver() {
         bindir="/opt/winehua/bin"
         datadir="/opt/winehua/share"
     fi
-    local wine_include="-I$WINE_SRC/include -I$WINE_SRC/include/wine -I$WINE_SRC/server -I$WINE_SRC/build-ohos/include"
+    local wine_include="-I$WINE_SRC/include -I$WINE_SRC/include/wine -I$WINE_SRC/server -I$BUILD_DIR/wine-ohos/include"
     # ARM64 Pad: Box64 加载 x86_64 wineserver ELF，用 x86_64 目标编译
     # x86_64 Pad: 系统 linker 直接加载 libwineserver.so (原生 .so)
     local srv_target="$NATIVE_TARGET"

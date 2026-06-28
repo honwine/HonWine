@@ -35,13 +35,13 @@ with open('$profile', 'w') as f:
 # ============================================================
 package_hnp() {
     log "=== 打包 HNP ($NATIVE_ARCH) ==="
-    mkdir -p "$OUT_DIR"
-    "$HNPCLI" pack -i "$STAGING_DIR" -o "$OUT_DIR" -n winehua -v 0.1.0 || { err "hnpcli pack 失败"; return 1; }
+    mkdir -p "$BUILD_DIR"
+    "$HNPCLI" pack -i "$STAGING_DIR" -o "$BUILD_DIR" -n winehua -v 0.1.0 || { err "hnpcli pack 失败"; return 1; }
 
     # HNP 按架构存放
     local hnp_dir="$WINEHUA/entry/hnp/$NATIVE_ARCH"
     mkdir -p "$hnp_dir"
-    cp "$OUT_DIR/winehua.hnp" "$hnp_dir/winehua.hnp"
+    cp "$BUILD_DIR/winehua.hnp" "$hnp_dir/winehua.hnp"
     ls -lh "$hnp_dir/winehua.hnp"
 }
 

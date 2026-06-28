@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/env.sh"
 BUILD_DIR="$ROOT/build"
-SDK_LINK_DIR="$ROOT/out/sdk-links"
+SDK_LINK_DIR="$ROOT/build/sdk-links"
 HOST_TOOLS_DIR="$BUILD_DIR/host-tools"
 WRAPPER_DIR="$BUILD_DIR/tool-wrappers"
 SYSROOT_EXT="$BUILD_DIR/sysroot-ext"
@@ -20,8 +20,8 @@ LIBDRM_SOURCE_ROOT="${WINEHUA_OHOS_LIBDRM_SOURCE_ROOT:-$ROOT/thirdparty/libdrm}"
 WAYLAND_PROTOCOLS_SOURCE_ROOT="${WINEHUA_WAYLAND_PROTOCOLS_SOURCE_ROOT:-}"
 WAYLAND_PROTOCOLS_URL="${WINEHUA_WAYLAND_PROTOCOLS_URL:-https://gitlab.freedesktop.org/wayland/wayland-protocols.git}"
 WAYLAND_PROTOCOLS_TAG="${WINEHUA_WAYLAND_PROTOCOLS_TAG:-1.39}"
-BUILD_ROOT="${WINEHUA_GUEST_GFX_BUILD_ROOT:-$ROOT/out/guest_gfx_build/${NATIVE_ARCH:-x86_64}/$PLATFORM-$MODE}"
-INSTALL_ROOT="${WINEHUA_GUEST_GFX_INSTALL_ROOT:-$ROOT/out/guest_gfx_install/${NATIVE_ARCH:-x86_64}}"
+BUILD_ROOT="${WINEHUA_GUEST_GFX_BUILD_ROOT:-$ROOT/build/guest_gfx_build/${NATIVE_ARCH:-x86_64}/$PLATFORM-$MODE}"
+INSTALL_ROOT="${WINEHUA_GUEST_GFX_INSTALL_ROOT:-$ROOT/build/guest_gfx_install/${NATIVE_ARCH:-x86_64}}"
 PACKAGE_BUNDLE=1
 FETCH_IF_MISSING=1
 CLEAN=0
@@ -43,7 +43,7 @@ What it does:
     because the guest Mesa virgl build needs a target-side libdrm.pc + headers.
   - Auto-provisions a newer wayland-protocols bundle (>= 1.38) into sysroot-ext
     when the repo's pinned copy is too old for the current Mesa tree.
-  - Packages the install tree into prebuilt/guest_gfx/<arch>/ unless
+  - Packages the install tree into build/guest_gfx/<arch>/ unless
     --no-package is passed.
 
 Notes:
@@ -146,7 +146,7 @@ normalize_host_path_input() {
 ensure_python_module() {
     local dist_name="$1"
     local module_name="$2"
-    local cache_root="$ROOT/out/guest_gfx_pydeps"
+    local cache_root="$ROOT/build/guest_gfx_pydeps"
 
     export PYTHONPATH="$cache_root${PYTHONPATH:+:$PYTHONPATH}"
     if python3 -c "import $module_name" >/dev/null 2>&1; then
@@ -431,7 +431,7 @@ fetch_modern_wayland_protocols_root() {
 }
 
 ensure_target_libdrm() {
-    local build_root="$ROOT/out/libdrm_build/${NATIVE_ARCH}"
+    local build_root="$ROOT/build/libdrm_build/${NATIVE_ARCH}"
     local arch_pc_dir="$SYSROOT_EXT/usr/lib/x86_64-linux-ohos/pkgconfig"
     local meson_args=()
 
@@ -511,7 +511,7 @@ ensure_modern_wayland_protocols() {
     local current_version=""
     local required_version="1.38"
     local required_xml="$SYSROOT_EXT/usr/share/wayland-protocols/staging/linux-drm-syncobj/linux-drm-syncobj-v1.xml"
-    local build_root="$ROOT/out/wayland_protocols_build/$WAYLAND_PROTOCOLS_TAG"
+    local build_root="$ROOT/build/wayland_protocols_build/$WAYLAND_PROTOCOLS_TAG"
     local share_pc_dir="$SYSROOT_EXT/usr/share/pkgconfig"
 
     current_version="$(read_pkgconfig_version "$current_pc" || true)"

@@ -15,9 +15,8 @@ bash "$SCRIPT_DIR/build_xkbcommon.sh"
 # XKB 键盘布局数据 (xkeyboard-config, Wine 键盘驱动依赖, 架构无关)
 bash "$SCRIPT_DIR/build_xkbconfig.sh"
 
-# Guest GPU Mesa/VirGL 库 (输出到 prebuilt/guest_gfx/)
+# Guest GPU Mesa/VirGL 库 (输出到 build/guest_gfx/)
 # 前提: OHOS SDK + meson + wayland-scanner + wayland-protocols >= 1.38
-# 若源码构建失败, 使用已有的 prebuilt/guest_gfx/ 作为回退。
 if [ -d "$ROOT/thirdparty/mesa" ] && [ -d "$ROOT/thirdparty/libdrm" ] \
    && [ -d "$ROOT/thirdparty/wayland-protocols" ]; then
     log "=== 构建 guest_gfx (Mesa/VirGL) 从源码 ==="

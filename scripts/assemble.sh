@@ -28,10 +28,10 @@ assemble_pad() {
         log "  → Wine .so → libs/x86_64/"
 
         # 所有 Wine Unix .so → libs/x86_64/ (系统 linker 通过文件名搜索)
-        for so in "$WINE_SRC/build-ohos/dlls/"*/*.so; do
+        for so in "$BUILD_DIR/wine-ohos/dlls/"*/*.so; do
             cp "$so" "$NATIVE_LIBS/"
         done
-        log "    Wine .so: $(ls "$WINE_SRC/build-ohos/dlls/"*/*.so 2>/dev/null | wc -l) files"
+        log "    Wine .so: $(ls "$BUILD_DIR/wine-ohos/dlls/"*/*.so 2>/dev/null | wc -l) files"
 
         # 交叉编译依赖 → libs/x86_64/
         # (系统 linker 自动搜索此路径, 无需 x86_64-unix 子目录)
@@ -102,10 +102,10 @@ assemble_pad() {
         _pick_arm64_native "libffi.so.8"         "libffi.so"
 
         # ntdll.so → rawfile
-        cp "$WINE_SRC/build-ohos/dlls/ntdll/ntdll.so" "$wine_data/bin/"
+        cp "$BUILD_DIR/wine-ohos/dlls/ntdll/ntdll.so" "$wine_data/bin/"
 
         # x86_64-unix/ .so → rawfile
-        for so in "$WINE_SRC/build-ohos/dlls/"*/*.so; do
+        for so in "$BUILD_DIR/wine-ohos/dlls/"*/*.so; do
             [ "$(basename "$so")" = "ntdll.so" ] && continue
             cp "$so" "$wine_data/bin/x86_64-unix/"
         done
@@ -143,48 +143,48 @@ assemble_pad() {
         cp "$SYSROOT/usr/lib/x86_64-linux-ohos/libc.so" "$wine_data/bin/x86_64-unix/"
 
         # wine + wineserver (x86_64 ELF, 由 box64 加载)
-        cp "$WINE_SRC/build-ohos/loader/wine" "$wine_data/bin/"
+        cp "$BUILD_DIR/wine-ohos/loader/wine" "$wine_data/bin/"
         if [ -f "$BUILD_DIR/wine_server/wineserver" ]; then
             cp "$BUILD_DIR/wine_server/wineserver" "$wine_data/bin/"
-        elif [ -f "$WINE_SRC/build-ohos/server/wineserver" ]; then
-            cp "$WINE_SRC/build-ohos/server/wineserver" "$wine_data/bin/"
+        elif [ -f "$BUILD_DIR/wine-ohos/server/wineserver" ]; then
+            cp "$BUILD_DIR/wine-ohos/server/wineserver" "$wine_data/bin/"
         fi
     fi
 
     # -- 2. PE DLL + 数据文件 → rawfile (两种架构共用) --
     # x86_64-windows/
-    for dll in "$WINE_SRC/build-native/dlls/"*/x86_64-windows/*.dll; do
+    for dll in "$BUILD_DIR/wine-native/dlls/"*/x86_64-windows/*.dll; do
         cp "$dll" "$wine_data/bin/x86_64-windows/"
     done
-    for drv in "$WINE_SRC/build-native/dlls/"*/x86_64-windows/*.drv; do
+    for drv in "$BUILD_DIR/wine-native/dlls/"*/x86_64-windows/*.drv; do
         cp "$drv" "$wine_data/bin/x86_64-windows/"
     done
-    for exe in "$WINE_SRC/build-native/dlls/"*/x86_64-windows/*.exe; do
+    for exe in "$BUILD_DIR/wine-native/dlls/"*/x86_64-windows/*.exe; do
         cp "$exe" "$wine_data/bin/x86_64-windows/"
     done
-    for sys in "$WINE_SRC/build-native/dlls/"*/x86_64-windows/*.sys; do
+    for sys in "$BUILD_DIR/wine-native/dlls/"*/x86_64-windows/*.sys; do
         cp "$sys" "$wine_data/bin/x86_64-windows/"
     done
     log "  x86_64-windows → $(ls "$wine_data/bin/x86_64-windows" | wc -l) files"
 
     # *.exe stubs → rawfile
-    for exe in "$WINE_SRC/build-native/programs/"*/x86_64-windows/*.exe; do
+    for exe in "$BUILD_DIR/wine-native/programs/"*/x86_64-windows/*.exe; do
         cp "$exe" "$wine_data/bin/"
     done
     # graphics smoke test (OHOS 交叉编译产物, 不在 build-native/)
-    if [ -f "$WINE_SRC/build-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" ]; then
-        cp "$WINE_SRC/build-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" "$wine_data/bin/x86_64-windows/"
+    if [ -f "$BUILD_DIR/wine-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" ]; then
+        cp "$BUILD_DIR/wine-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" "$wine_data/bin/x86_64-windows/"
         log "  winehua_graphics_smoke.exe → x86_64-windows/"
     fi
 
     # fonts
     cp "$WINE_SRC/fonts/"*.ttf "$wine_data/share/wine/fonts/"
     # NLS
-    cp "$WINE_SRC/build-native/nls/"*.nls "$wine_data/share/wine/nls/"
+    cp "$BUILD_DIR/wine-native/nls/"*.nls "$wine_data/share/wine/nls/"
     # winmd
-    cp "$WINE_SRC/build-native/include/"*.winmd "$wine_data/share/wine/winmd/"
+    cp "$BUILD_DIR/wine-native/include/"*.winmd "$wine_data/share/wine/winmd/"
     # wine.inf (含 OHOS font substitutes)
-    cp "$WINE_SRC/build-native/loader/wine.inf" "$wine_data/share/wine/"
+    cp "$BUILD_DIR/wine-native/loader/wine.inf" "$wine_data/share/wine/"
     sed -i '/^\[MCI\]$/i\
 ;; OHOS font substitutes\
 HKLM,%FontSubStr%,"System",,"HarmonyOS Sans"\
@@ -198,12 +198,12 @@ HKLM,%FontSubStr%,"Courier New",,"Noto Sans Mono"' "$wine_data/share/wine/wine.i
     fi
 
     # guest GPU 库 (Mesa/VirGL, 供 GraphicsBroker 注入到 Wine LD_LIBRARY_PATH)
-    if [ -d "$WINEHUA/prebuilt/guest_gfx/$NATIVE_ARCH/lib" ]; then
+    if [ -d "$BUILD_DIR/guest_gfx/$NATIVE_ARCH/lib" ]; then
         mkdir -p "$wine_data/bin/guest_gfx"
-        cp -a "$WINEHUA/prebuilt/guest_gfx/$NATIVE_ARCH/"* "$wine_data/bin/guest_gfx/"
+        cp -a "$BUILD_DIR/guest_gfx/$NATIVE_ARCH/"* "$wine_data/bin/guest_gfx/"
         log "  guest_gfx ($NATIVE_ARCH): $(ls "$wine_data/bin/guest_gfx/lib"/*.so* 2>/dev/null | wc -l) .so files"
     else
-        log "  guest_gfx: SKIP (prebuilt/guest_gfx/$NATIVE_ARCH/lib not found)"
+        log "  guest_gfx: SKIP (build/guest_gfx/$NATIVE_ARCH/lib not found)"
     fi
 
     # -- 3. 打包 zip → rawfile (不带 wine-data/ 前缀) --
@@ -243,13 +243,13 @@ mkdir -p "$HNP_LAYOUT/share/wine/nls"
 BIN="$HNP_LAYOUT/bin"
 
 # ---- 主二进制 ----
-cp "$WINE_SRC/build-ohos/loader/wine" "$BIN/"
+cp "$BUILD_DIR/wine-ohos/loader/wine" "$BIN/"
 
 # wineserver: 优先手动编译版 (含 __ANDROID__), 回退 make 版
 if [ -f "$BUILD_DIR/wine_server/wineserver" ]; then
     cp "$BUILD_DIR/wine_server/wineserver" "$BIN/"
-elif [ -f "$WINE_SRC/build-ohos/server/wineserver" ]; then
-    cp "$WINE_SRC/build-ohos/server/wineserver" "$BIN/"
+elif [ -f "$BUILD_DIR/wine-ohos/server/wineserver" ]; then
+    cp "$BUILD_DIR/wine-ohos/server/wineserver" "$BIN/"
 else
     err "wineserver 未找到！请先执行: bash scripts/build_wine.sh"
 fi
@@ -282,11 +282,11 @@ BOXWRAP
 fi
 
 # ---- ntdll.so (必须在 bin/ — wine loader 硬编码加载) ----
-cp "$WINE_SRC/build-ohos/dlls/ntdll/ntdll.so" "$BIN/"
+cp "$BUILD_DIR/wine-ohos/dlls/ntdll/ntdll.so" "$BIN/"
 
 # ---- x86_64-unix/ (其他 .so — load_builtin_unixlib 拼接路径) ----
 mkdir -p "$BIN/x86_64-unix"
-for so in "$WINE_SRC/build-ohos/dlls/"*/*.so; do
+for so in "$BUILD_DIR/wine-ohos/dlls/"*/*.so; do
     [ "$(basename "$so")" = "ntdll.so" ] && continue
     cp "$so" "$BIN/x86_64-unix/"
 done
@@ -294,28 +294,28 @@ log "  x86_64-unix: $(ls "$BIN/x86_64-unix" | wc -l) .so files"
 
 # ---- x86_64-windows/ (PE DLL + .drv + .exe + .sys) ----
 mkdir -p "$BIN/x86_64-windows"
-for dll in "$WINE_SRC/build-native/dlls/"*/x86_64-windows/*.dll; do
+for dll in "$BUILD_DIR/wine-native/dlls/"*/x86_64-windows/*.dll; do
     cp "$dll" "$BIN/x86_64-windows/"
 done
-for drv in "$WINE_SRC/build-native/dlls/"*/x86_64-windows/*.drv; do
+for drv in "$BUILD_DIR/wine-native/dlls/"*/x86_64-windows/*.drv; do
     cp "$drv" "$BIN/x86_64-windows/"
 done
-for exe in "$WINE_SRC/build-native/dlls/"*/x86_64-windows/*.exe; do
+for exe in "$BUILD_DIR/wine-native/dlls/"*/x86_64-windows/*.exe; do
     cp "$exe" "$BIN/x86_64-windows/"
 done
-for sys in "$WINE_SRC/build-native/dlls/"*/x86_64-windows/*.sys; do
+for sys in "$BUILD_DIR/wine-native/dlls/"*/x86_64-windows/*.sys; do
     cp "$sys" "$BIN/x86_64-windows/"
 done
 log "  x86_64-windows: $(ls "$BIN/x86_64-windows" | wc -l) DLL/DRV/EXE/SYS files"
 
 # ---- *.exe stubs ----
-for exe in "$WINE_SRC/build-native/programs/"*/x86_64-windows/*.exe; do
+for exe in "$BUILD_DIR/wine-native/programs/"*/x86_64-windows/*.exe; do
     cp "$exe" "$BIN/"
 done
 log "  *.exe stubs: $(ls "$BIN"/*.exe 2>/dev/null | wc -l) files"
 
 # ---- graphics smoke test (OHOS 交叉编译产物, 不在 build-native/) ----
-smoke_src="$WINE_SRC/build-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe"
+smoke_src="$BUILD_DIR/wine-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe"
 if [ -f "$smoke_src" ]; then
     cp "$smoke_src" "$BIN/x86_64-windows/"
     log "  winehua_graphics_smoke.exe → x86_64-windows/"
@@ -358,12 +358,12 @@ else
 fi
 
 # ---- guest GPU 库 (Mesa/VirGL, 供 GraphicsBroker 注入到 Wine LD_LIBRARY_PATH) ----
-if [ -d "$WINEHUA/prebuilt/guest_gfx/$NATIVE_ARCH/lib" ]; then
+if [ -d "$BUILD_DIR/guest_gfx/$NATIVE_ARCH/lib" ]; then
     mkdir -p "$BIN/guest_gfx"
-    cp -a "$WINEHUA/prebuilt/guest_gfx/$NATIVE_ARCH/"* "$BIN/guest_gfx/"
+    cp -a "$BUILD_DIR/guest_gfx/$NATIVE_ARCH/"* "$BIN/guest_gfx/"
     log "  guest_gfx ($NATIVE_ARCH): $(ls "$BIN/guest_gfx/lib"/*.so* 2>/dev/null | wc -l) .so files"
 else
-    log "  guest_gfx: SKIP (prebuilt/guest_gfx/$NATIVE_ARCH/lib not found)"
+    log "  guest_gfx: SKIP (build/guest_gfx/$NATIVE_ARCH/lib not found)"
 fi
 
 cp "$SYSROOT/usr/lib/x86_64-linux-ohos/libc.so" "$HNP_LAYOUT/lib/x86_64/"
@@ -417,11 +417,11 @@ else
 fi
 
 log "  fonts: $(ls "$HNP_LAYOUT/share/wine/fonts" | wc -l) .ttf files"
-cp "$WINE_SRC/build-native/nls/"*.nls "$HNP_LAYOUT/share/wine/nls/"
+cp "$BUILD_DIR/wine-native/nls/"*.nls "$HNP_LAYOUT/share/wine/nls/"
 mkdir -p "$HNP_LAYOUT/share/wine/winmd"
-cp "$WINE_SRC/build-native/include/"*.winmd "$HNP_LAYOUT/share/wine/winmd/"
+cp "$BUILD_DIR/wine-native/include/"*.winmd "$HNP_LAYOUT/share/wine/winmd/"
 log "  winmd: $(ls "$HNP_LAYOUT/share/wine/winmd" | wc -l) .winmd files"
-cp "$WINE_SRC/build-native/loader/wine.inf" "$HNP_LAYOUT/share/wine/"
+cp "$BUILD_DIR/wine-native/loader/wine.inf" "$HNP_LAYOUT/share/wine/"
 
 # OHOS: 无 fontconfig, Wine 内置字体 glyph metrics 不足.
 # 将 Windows 默认字体映射到 HarmonyOS 系统字体.

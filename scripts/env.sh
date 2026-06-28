@@ -74,9 +74,8 @@ BOX64_SRC="$ROOT/thirdparty/box64"
 # 产物路径
 BUILD_DIR="$ROOT/build"          # 源码构建中间产物
 SYSROOT_EXT="$BUILD_DIR/sysroot-ext"  # 交叉编译扩展 (不污染 SDK)
-STAGING_DIR="$ROOT/out/staging"  # HNP 打包临时目录
+STAGING_DIR="$BUILD_DIR/staging"   # HNP/Pad 打包临时目录
 HNP_LAYOUT="$STAGING_DIR/opt/winehua"
-OUT_DIR="$ROOT/out"              # 最终产出
 
 # sysroot-ext 目录结构
 SYSROOT_EXT_INC="$SYSROOT_EXT/usr/include"

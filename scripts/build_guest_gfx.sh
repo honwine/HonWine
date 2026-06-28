@@ -17,7 +17,7 @@ MODE="${GUEST_GFX_MODE:-virpipe}"
 INSTALL_ROOT="${WINEHUA_GUEST_GFX_INSTALL_ROOT:-${GUEST_GFX_INSTALL_ROOT:-}}"
 MESA_SOURCE_ROOT="${WINEHUA_OHOS_MESA_SOURCE_ROOT:-${GUEST_GFX_MESA_SOURCE_ROOT:-}}"
 LIBDRM_SOURCE_ROOT="${WINEHUA_OHOS_LIBDRM_SOURCE_ROOT:-${GUEST_GFX_LIBDRM_SOURCE_ROOT:-}}"
-OUTPUT_ROOT="${WINEHUA_GUEST_GFX_OUTPUT_ROOT:-$ROOT/prebuilt/guest_gfx/$NATIVE_ARCH}"
+OUTPUT_ROOT="${WINEHUA_GUEST_GFX_OUTPUT_ROOT:-$ROOT/build/guest_gfx/$NATIVE_ARCH}"
 CLEAN=0
 
 usage() {
@@ -27,7 +27,7 @@ Usage:
 
 Notes:
   - This script packages an already-built OHOS Mesa install tree into
-    prebuilt/guest_gfx/<arch>/ so assemble.sh can stage it into the HNP.
+    build/guest_gfx/<arch>/ so assemble.sh can stage it into the HNP.
   - The install root must contain OHOS-target runtime files, not regular Linux
     desktop libraries from WSL/Ubuntu.
   - Requires thirdparty/mesa and thirdparty/libdrm submodules (gitee OpenHarmony mirrors).
@@ -221,9 +221,9 @@ EOF
 }
 
 INSTALL_ROOT="${INSTALL_ROOT:-$(find_first_existing_dir \
-    "$ROOT/out/guest_gfx_install/$NATIVE_ARCH" \
-    "$ROOT/out/mesa-install/$NATIVE_ARCH" \
-    "$ROOT/out/mesa-install/$NATIVE_ARCH/install" \
+    "$ROOT/build/guest_gfx_install/$NATIVE_ARCH" \
+    "$ROOT/build/mesa-install/$NATIVE_ARCH" \
+    "$ROOT/build/mesa-install/$NATIVE_ARCH/install" \
     || true)}"
 
 [ -n "$INSTALL_ROOT" ] || err "guest_gfx install root not provided. Set WINEHUA_GUEST_GFX_INSTALL_ROOT or pass --install-root with an OHOS Mesa install tree."
