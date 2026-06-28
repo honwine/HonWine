@@ -5,6 +5,7 @@
 #include "egl_renderer.h"
 #include "audio_broker.h"
 #include "audio_ipc_protocol.h"
+#include "graphics_broker.h"
 #include "wine_constants.h"
 #include "wine_env.h"
 
@@ -197,6 +198,18 @@ static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
                                               int audioBootstrapFd) {
     std::string shareDir = binDir + "/../share";
     std::string xkbDir = shareDir + "/X11/xkb";
+    std::string runtimeLibPath = binDir + ":" + binDir + "/x86_64-unix:" + binDir + "/../lib/x86_64";
+    winehua::GraphicsBackendState graphicsState = winehua::GraphicsBroker::GetInstance().GetState();
+    std::string guestReceiverLibDir;
+    bool useGuestReceiverRuntime = graphicsState.active == winehua::GraphicsBackend::Virgl;
+
+    if (useGuestReceiverRuntime && graphicsState.guestReceiverPresent && !graphicsState.guestReceiverRuntimeDir.empty()) {
+        guestReceiverLibDir = graphicsState.guestReceiverRuntimeDir + "/lib";
+        if (access(guestReceiverLibDir.c_str(), F_OK) == 0) {
+            runtimeLibPath = guestReceiverLibDir + ":" + runtimeLibPath;
+        }
+    }
+
     std::vector<std::string> env = {
         "XDG_RUNTIME_DIR=" + sockDir,
         "WAYLAND_DISPLAY=" + sockName,
@@ -221,17 +234,60 @@ static std::vector<std::string> BuildWineEnv(const std::string& sockDir,
     // ARM64: x86_64 .so 由 Box64 加载，不在系统 LD_LIBRARY_PATH
     // LD_LIBRARY_PATH 只包含 ARM64 原生 .so
     env.push_back("LD_LIBRARY_PATH=" + libPath);
-    env.push_back("BOX64_LD_LIBRARY_PATH=" + binDir + "/x86_64-unix");
+    env.push_back("BOX64_LD_LIBRARY_PATH=" + runtimeLibPath);
 #else
     // x86_64: 系统 linker 直接加载 x86_64 OHOS .so
-    env.push_back("LD_LIBRARY_PATH=" + libPath + ":" + binDir + "/x86_64-unix");
+    env.push_back("LD_LIBRARY_PATH=" + runtimeLibPath);
 #endif
     if (audioBootstrapFd >= 0) {
         env.push_back("WINE_OHOS_AUDIO_ENABLE=1");
         env.push_back("WINE_OHOS_AUDIO_BOOTSTRAP_FD=" + std::to_string(audioBootstrapFd));
         env.push_back("WINE_OHOS_AUDIO_PROTOCOL_VERSION=" + std::to_string(WINEHUA_AUDIO_PROTOCOL_VERSION));
     }
+    // Guest GPU 库路径 + VirGL socket 等
+    winehua::GraphicsBroker::GetInstance().SetWineRuntimeBinaryDir(binDir);
+    winehua::GraphicsBroker::GetInstance().AppendWineEnv(env);
+
+    OH_LOG_INFO(LOG_APP,
+                "[WineEnv] backend=%{public}s guestMode=%{public}s guestLib=%{public}s runtimeLibPath=%{public}s",
+                winehua::GraphicsBroker::BackendName(graphicsState.active),
+                graphicsState.guestReceiverMode.empty() ? "stock-egl" : graphicsState.guestReceiverMode.c_str(),
+                guestReceiverLibDir.empty() ? "(none)" : guestReceiverLibDir.c_str(),
+                runtimeLibPath.c_str());
     return env;
+}
+
+// -- Graphics 辅助函数 --
+static std::string BasenameOfPath(const std::string& path) {
+    size_t slash = path.find_last_of("/\\");
+    if (slash == std::string::npos) return path;
+    return path.substr(slash + 1);
+}
+
+static bool IsGraphicsSmokeExePath(const std::string& path) {
+    std::string name = BasenameOfPath(path);
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    return name == "winehua_graphics_smoke.exe";
+}
+
+static void LogGraphicsBackendStateForLaunch(const char* tag) {
+    winehua::GraphicsBackendState state = winehua::GraphicsBroker::GetInstance().GetState();
+    OH_LOG_INFO(LOG_APP,
+                "[%{public}s] graphics requested=%{public}s active=%{public}s runtimeReady=%{public}s "
+                "guestReceiver=%{public}s(%{public}s) virglSocketReady=%{public}s virglLibraryPresent=%{public}s",
+                tag,
+                winehua::GraphicsBroker::BackendName(state.requested),
+                winehua::GraphicsBroker::BackendName(state.active),
+                state.runtimeReady ? "true" : "false",
+                state.guestReceiverPresent ? "true" : "false",
+                state.guestReceiverMode.empty() ? "stock-egl" : state.guestReceiverMode.c_str(),
+                state.virglSocketReady ? "true" : "false",
+                state.virglLibraryPresent ? "true" : "false");
+    if (!state.virglSmokeError.empty())
+        OH_LOG_WARN(LOG_APP, "[%{public}s] virgl smoke error: %{public}s", tag, state.virglSmokeError.c_str());
+    if (!state.lastError.empty())
+        OH_LOG_WARN(LOG_APP, "[%{public}s] graphics note: %{public}s", tag, state.lastError.c_str());
 }
 
 // -- 客户端 stdout/stderr 读取线程 (每个进程独立) --
@@ -397,6 +453,10 @@ static void LaunchThreadFunc(LaunchParams* p) {
     OH_LOG_INFO(LOG_APP, "[Launch-Async] wineserver + wineboot + wine starting in background");
     OH_LOG_INFO(LOG_APP, "[Launch-Async] XKB_CONFIG_ROOT=%{public}s",
                 (p->winehuaBin + "/../share/X11/xkb").c_str());
+
+    // 初始化 GraphicsBroker (guest GPU 验证，默认 Shm 后端不阻塞)
+    winehua::GraphicsBroker::GetInstance().SetWineRuntimeBinaryDir(p->winehuaBin);
+    winehua::GraphicsBroker::GetInstance().EnsureStarted(p->sockDir);
 
     // 组装 envp 环境变量
     int audioBootstrapFd = CreateAudioBootstrapFd(p->sockDir);
@@ -704,7 +764,34 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
 #ifndef PAD_MODE
     audioBootstrapFd = CreateAudioBootstrapFd(sockDir);
 #endif
+    // Graphics: 检测到 graphics smoke → 临时切 VirGL 后端
+    bool isGraphicsSmoke = IsGraphicsSmokeExePath(exePath);
+    bool restoreGraphicsBackend = false;
+    winehua::GraphicsBackend previousBackend = winehua::GraphicsBackend::Shm;
+    if (isGraphicsSmoke) {
+        auto& gb = winehua::GraphicsBroker::GetInstance();
+        gb.SetWineRuntimeBinaryDir(binDir);
+        winehua::GraphicsBackendState st = gb.GetState();
+        previousBackend = st.requested;
+        if (st.requested != winehua::GraphicsBackend::Virgl) {
+            gb.SetRequestedBackend(winehua::GraphicsBackend::Virgl);
+            restoreGraphicsBackend = true;
+            OH_LOG_INFO(LOG_APP, "[Wine] temporarily switching to VirGL for graphics smoke");
+        }
+        gb.EnsureStarted(sockDir);
+        LogGraphicsBackendStateForLaunch("Wine");
+    }
     std::vector<std::string> envStrs = BuildWineEnv(sockDir, sockName, libPath, binDir, audioBootstrapFd);
+    if (restoreGraphicsBackend) {
+        winehua::GraphicsBroker::GetInstance().SetRequestedBackend(previousBackend);
+        OH_LOG_INFO(LOG_APP, "[Wine] restored graphics backend after env setup");
+    }
+    if (isGraphicsSmoke) {
+        envStrs.push_back("WINEHUA_GRAPHICS_FORCE_GL=1");
+        envStrs.push_back("WINEHUA_OPENGL_DIAG=1");
+        envStrs.push_back("EGL_LOG_LEVEL=debug");
+        OH_LOG_INFO(LOG_APP, "[Wine] forcing graphics smoke to continue into OpenGL diagnostics");
+    }
     std::vector<char*> envp;
     for (auto& s : envStrs) envp.push_back((char*)s.c_str());
     envp.push_back(nullptr);
@@ -1259,12 +1346,14 @@ static napi_value RunMmapTests(napi_env env, napi_callback_info) {
 static napi_value StopClient(napi_env, napi_callback_info) {
     KillAllProcesses();
     WaylandServer::GetInstance()->ResetFirstFrame();
+    winehua::GraphicsBroker::GetInstance().Stop();
     return nullptr;
 }
 
 // -- NAPI: stopAll — 杀掉所有 Wine 进程 + 停 Wayland server --
 static napi_value StopAll(napi_env, napi_callback_info) {
     KillAllProcesses();
+    winehua::GraphicsBroker::GetInstance().Stop();
     WaylandServer::GetInstance()->Stop();
     return nullptr;
 }

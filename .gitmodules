@@ -27,3 +27,17 @@
 [submodule "thirdparty/xkeyboard-config"]
 	path = thirdparty/xkeyboard-config
 	url = https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config.git
+[submodule "thirdparty/virglrenderer"]
+	path = thirdparty/virglrenderer
+	url = https://github.com/winehua/virglrenderer.git
+[submodule "thirdparty/libepoxy"]
+	path = thirdparty/libepoxy
+	url = https://github.com/anholt/libepoxy.git
+[submodule "thirdparty/mesa"]
+	path = thirdparty/mesa
+	url = https://gitee.com/openharmony/third_party_mesa3d.git
+	branch = OpenHarmony-6.0-Beta1
+[submodule "thirdparty/libdrm"]
+	path = thirdparty/libdrm
+	url = https://gitee.com/openharmony/third_party_libdrm.git
+	branch = OpenHarmony-6.0-Beta1

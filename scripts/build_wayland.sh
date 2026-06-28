@@ -44,8 +44,10 @@ ninja -C "$WL_BUILD/x86_64"
 # 安装 .so (文件名 = SONAME)
 cp "$WL_BUILD/x86_64/src/libwayland-client.so.0.22.0" "$SYSROOT_EXT_LIB/libwayland-client.so.0"
 cp "$WL_BUILD/x86_64/src/libwayland-server.so.0.22.0" "$SYSROOT_EXT_LIB/libwayland-server.so.0"
+cp "$WL_BUILD/x86_64/egl/libwayland-egl.so.1.22.0" "$SYSROOT_EXT_LIB/libwayland-egl.so.1" 2>/dev/null || true
 ln -sf libwayland-client.so.0 "$SYSROOT_EXT_LIB/libwayland-client.so"
 ln -sf libwayland-server.so.0 "$SYSROOT_EXT_LIB/libwayland-server.so"
+ln -sf libwayland-egl.so.1 "$SYSROOT_EXT_LIB/libwayland-egl.so" 2>/dev/null || true
 
 # 头文件
 cp "$WL_SRC/src/wayland-client.h" \
@@ -54,6 +56,8 @@ cp "$WL_SRC/src/wayland-client.h" \
    "$WL_BUILD/x86_64/src/wayland-client-protocol.h" \
    "$WL_BUILD/x86_64/src/wayland-version.h" \
    "$SYSROOT_EXT_INC/"
+cp "$WL_SRC/egl/wayland-egl.h" "$SYSROOT_EXT_INC/" 2>/dev/null || true
+cp "$WL_SRC/egl/wayland-egl-core.h" "$SYSROOT_EXT_INC/" 2>/dev/null || true
 
 # 2. wayland-protocols
 meson_build "$WL_BUILD/protocols" "$WP_SRC" \
@@ -77,6 +81,18 @@ Description: Wayland client side library
 Version: 1.22.0
 Requires.private: libffi
 Libs: -L\${libdir} -lwayland-client
+Cflags: -I\${includedir}
+EOF
+
+cat > "$SYSROOT_EXT_PC/wayland-egl.pc" << EOF
+prefix=$SYSROOT_EXT/usr
+includedir=\${prefix}/include
+libdir=\${prefix}/lib/x86_64-linux-ohos
+
+Name: Wayland EGL
+Description: Wayland EGL platform library
+Version: 1.22.0
+Libs: -L\${libdir} -lwayland-egl
 Cflags: -I\${includedir}
 EOF
 

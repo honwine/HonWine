@@ -18,7 +18,7 @@ public:
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_).count();
         if (ms >= 10000) {
             double fps = frames_ * 1000.0 / ms;
-            OH_LOG_INFO(LOG_APP, "[%{public}s] %.2f fps", tag_, fps);
+            OH_LOG_INFO(LOG_APP, "[%{public}s] %{public}.2f fps", tag_, fps);
             frames_ = 0;
             last_ = now;
         }

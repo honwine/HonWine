@@ -147,11 +147,113 @@ install_headers() {
     log "wayland 头文件 → $WINEHUA_INC"
 }
 
+# ── 5. libepoxy (VirGL host 渲染器依赖, EGL 函数加载) ──
+build_libepoxy() {
+    if [ -f "$NATIVE_LIBS/libepoxy.so.0" ]; then
+        log "libepoxy ($NATIVE_ARCH) 已就绪，跳过"
+        return 0
+    fi
+
+    log "--- libepoxy ($NATIVE_ARCH) ---"
+    local src="$ROOT/thirdparty/libepoxy"
+    local build="$NATIVE_BUILD/libepoxy"
+    local cross
+
+    [ -d "$src" ] || err "thirdparty/libepoxy is missing"
+
+    cross="$(gen_native_cross)"
+
+    rm -rf "$build"
+    meson setup "$build" "$src" \
+        --cross-file "$cross" \
+        --prefix "$build/install" \
+        --libdir lib \
+        -Dglx=no \
+        -Degl=yes \
+        -Dx11=false \
+        -Ddocs=false \
+        -Dtests=false
+
+    ninja -C "$build"
+    meson install -C "$build"
+
+    cp "$build/install/lib/libepoxy.so.0"* "$NATIVE_LIBS/libepoxy.so.0" 2>/dev/null || \
+        find "$build/install/lib" -maxdepth 1 -name 'libepoxy.so.0*' ! -name '*.so.0.*' -exec cp {} "$NATIVE_LIBS/libepoxy.so.0" \;
+    ln -sf libepoxy.so.0 "$NATIVE_LIBS/libepoxy.so"
+
+    log "libepoxy ($NATIVE_ARCH) → $NATIVE_LIBS"
+}
+
+# ── 6. virglrenderer (host VirGL 渲染器 + vtest server) ──
+find_python_with_yaml() {
+    if python3 -c 'import yaml' >/dev/null 2>&1; then
+        command -v python3
+        return 0
+    fi
+    err "python3 with PyYAML is required. Install: pip3 install pyyaml"
+}
+
+build_virglrenderer() {
+    if [ -f "$NATIVE_LIBS/libvirglrenderer.so.1" ] && [ -x "$NATIVE_LIBS/virgl_test_server" ]; then
+        log "virglrenderer ($NATIVE_ARCH) 已就绪，跳过"
+        return 0
+    fi
+
+    log "--- virglrenderer ($NATIVE_ARCH) ---"
+    local src="$ROOT/thirdparty/virglrenderer"
+    local build="$NATIVE_BUILD/virglrenderer"
+    local cross
+    local epoxy_pc="$NATIVE_BUILD/libepoxy/install/lib/pkgconfig"
+    local python_with_yaml
+
+    [ -d "$src" ] || err "thirdparty/virglrenderer is missing"
+    [ -d "$epoxy_pc" ] || err "libepoxy pkg-config directory is missing, build libepoxy first: $epoxy_pc"
+    python_with_yaml="$(find_python_with_yaml)"
+
+    cross="$(gen_native_cross)"
+
+    export PKG_CONFIG_PATH="$epoxy_pc${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    # virglrenderer meson 需要 python3 找到 PyYAML
+    export PATH="$(dirname "$python_with_yaml"):$PATH"
+
+    rm -rf "$build"
+    meson setup "$build" "$src" \
+        --cross-file "$cross" \
+        --prefix "$build/install" \
+        --libdir lib \
+        -Dplatforms=egl \
+        -Dexternal-egl-without-gbm=true \
+        -Dvtest=true \
+        -Dvenus=false \
+        -Dvideo=false \
+        -Dtests=false \
+        -Dfuzzer=false \
+        -Dtracing=none
+
+    ninja -C "$build"
+    meson install -C "$build"
+
+    # libvirglrenderer
+    cp "$build/install/lib/libvirglrenderer.so.1"* "$NATIVE_LIBS/libvirglrenderer.so.1" 2>/dev/null || \
+        find "$build/install/lib" -maxdepth 1 -name 'libvirglrenderer.so.1*' ! -name '*.so.1.*' -exec cp {} "$NATIVE_LIBS/libvirglrenderer.so.1" \;
+    ln -sf libvirglrenderer.so.1 "$NATIVE_LIBS/libvirglrenderer.so"
+
+    # virgl_test_server
+    [ -f "$build/install/bin/virgl_test_server" ] || \
+        find "$build" -name 'virgl_test_server' -type f -exec cp {} "$NATIVE_LIBS/virgl_test_server" \;
+    cp "$build/install/bin/virgl_test_server" "$NATIVE_LIBS/" 2>/dev/null || true
+    chmod +x "$NATIVE_LIBS/virgl_test_server" 2>/dev/null || true
+
+    log "virglrenderer ($NATIVE_ARCH) → $NATIVE_LIBS"
+}
+
 # ── main ──
 build_libffi
 build_wayland
 build_protocols
 install_headers
+build_libepoxy
+build_virglrenderer
 
 log "Native compositor 依赖就绪 ($NATIVE_ARCH)"
 log "  libs:  $NATIVE_LIBS"

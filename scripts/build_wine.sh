@@ -68,7 +68,10 @@ build_ohos_unix() {
         export WAYLAND_SCANNER=/usr/local/bin/wayland-scanner
 
         CC="$CLANG --target=$TARGET --sysroot=$SYSROOT" \
+        CFLAGS="${WINE_CFLAGS:-} -I$SYSROOT_EXT_INC -I$SYSROOT_EXT_INC/freetype2" \
         LDFLAGS="-fuse-ld=lld --sysroot=$SYSROOT --target=$TARGET -L$SYSROOT_EXT_LIB" \
+        PKG_CONFIG=/usr/bin/pkg-config \
+        PKG_CONFIG_PATH="$SYSROOT_EXT_PC" \
         ../configure \
             --host=x86_64-linux-ohos \
             --prefix=/opt/winehua \
@@ -77,7 +80,7 @@ build_ohos_unix() {
             --with-mingw=gcc \
             --disable-tests \
             --without-x --without-alsa \
-            --without-opengl --without-vulkan
+            --with-opengl --without-vulkan
     fi
 
     make -j$JOBS \

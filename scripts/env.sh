@@ -138,3 +138,28 @@ meson_build() {
 log()  { echo -e "\033[32m[BUILD]\033[0m $*"; }
 warn() { echo -e "\033[33m[WARN]\033[0m $*"; }
 err()  { echo -e "\033[31m[ERROR]\033[0m $*"; exit 1; }
+
+# ── 共享工具函数 ──
+find_first_existing_dir() {
+    local candidate=""
+    for candidate in "$@"; do
+        [ -n "${candidate:-}" ] || continue
+        if [ -d "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+resolve_first_executable() {
+    local candidate=""
+    for candidate in "$@"; do
+        [ -n "${candidate:-}" ] || continue
+        if [ -x "$candidate" ]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}

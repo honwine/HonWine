@@ -171,6 +171,11 @@ assemble_pad() {
     for exe in "$WINE_SRC/build-native/programs/"*/x86_64-windows/*.exe; do
         cp "$exe" "$wine_data/bin/"
     done
+    # graphics smoke test (OHOS 交叉编译产物, 不在 build-native/)
+    if [ -f "$WINE_SRC/build-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" ]; then
+        cp "$WINE_SRC/build-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe" "$wine_data/bin/x86_64-windows/"
+        log "  winehua_graphics_smoke.exe → x86_64-windows/"
+    fi
 
     # fonts
     cp "$WINE_SRC/fonts/"*.ttf "$wine_data/share/wine/fonts/"
@@ -190,6 +195,15 @@ HKLM,%FontSubStr%,"Courier New",,"Noto Sans Mono"' "$wine_data/share/wine/wine.i
     # XKB
     if [ -d "$SYSROOT_EXT_SHARE/X11/xkb" ]; then
         cp -r "$SYSROOT_EXT_SHARE/X11/xkb" "$wine_data/share/X11/"
+    fi
+
+    # guest GPU 库 (Mesa/VirGL, 供 GraphicsBroker 注入到 Wine LD_LIBRARY_PATH)
+    if [ -d "$WINEHUA/prebuilt/guest_gfx/$NATIVE_ARCH/lib" ]; then
+        mkdir -p "$wine_data/bin/guest_gfx"
+        cp -a "$WINEHUA/prebuilt/guest_gfx/$NATIVE_ARCH/"* "$wine_data/bin/guest_gfx/"
+        log "  guest_gfx ($NATIVE_ARCH): $(ls "$wine_data/bin/guest_gfx/lib"/*.so* 2>/dev/null | wc -l) .so files"
+    else
+        log "  guest_gfx: SKIP (prebuilt/guest_gfx/$NATIVE_ARCH/lib not found)"
     fi
 
     # -- 3. 打包 zip → rawfile (不带 wine-data/ 前缀) --
@@ -300,10 +314,17 @@ for exe in "$WINE_SRC/build-native/programs/"*/x86_64-windows/*.exe; do
 done
 log "  *.exe stubs: $(ls "$BIN"/*.exe 2>/dev/null | wc -l) files"
 
+# ---- graphics smoke test (OHOS 交叉编译产物, 不在 build-native/) ----
+smoke_src="$WINE_SRC/build-ohos/programs/winehua_graphics_smoke/x86_64-windows/winehua_graphics_smoke.exe"
+if [ -f "$smoke_src" ]; then
+    cp "$smoke_src" "$BIN/x86_64-windows/"
+    log "  winehua_graphics_smoke.exe → x86_64-windows/"
+fi
+
 # ---- ARM64 原生桥接库 (PC/HNP) + libc + 交叉编译依赖 + NLS + wine.inf + fonts ----
 # ARM64 native bridge libs for Box64 in HNP package
 if [ "$NATIVE_ARCH" = "arm64-v8a" ]; then
-    local aarch64_lib="$SYSROOT_EXT/usr/lib/$NATIVE_TARGET"
+    aarch64_lib="$SYSROOT_EXT/usr/lib/$NATIVE_TARGET"
     mkdir -p "$HNP_LAYOUT/lib/arm64-v8a"
     _pc_pick_arm64_native() {
         local soname="$1" linker="${2:-}"
@@ -319,6 +340,30 @@ if [ "$NATIVE_ARCH" = "arm64-v8a" ]; then
     _pc_pick_arm64_native "libwayland-client.so.0" "libwayland-client.so"
     _pc_pick_arm64_native "libffi.so.8"         "libffi.so"
     log "  ARM64 native bridge libs -> lib/arm64-v8a/"
+fi
+
+# ---- 宿主 VirGL 运行时 (libvirglrenderer.so + virgl_test_server) ----
+UNIX_DIR="$BIN/x86_64-unix"
+for lib in libepoxy.so.0 libvirglrenderer.so.1; do
+    [ -f "$NATIVE_LIBS/$lib" ] && cp "$NATIVE_LIBS/$lib" "$UNIX_DIR/"
+done
+[ -f "$NATIVE_LIBS/libepoxy.so" ] && cp "$NATIVE_LIBS/libepoxy.so" "$UNIX_DIR/"
+[ -f "$NATIVE_LIBS/libvirglrenderer.so" ] && cp "$NATIVE_LIBS/libvirglrenderer.so" "$UNIX_DIR/"
+if [ -f "$NATIVE_LIBS/virgl_test_server" ]; then
+    cp "$NATIVE_LIBS/virgl_test_server" "$BIN/"
+    chmod +x "$BIN/virgl_test_server"
+    log "  virgl_test_server → bin/"
+else
+    warn "virgl_test_server not found in $NATIVE_LIBS; VirGL host transport will stay unavailable"
+fi
+
+# ---- guest GPU 库 (Mesa/VirGL, 供 GraphicsBroker 注入到 Wine LD_LIBRARY_PATH) ----
+if [ -d "$WINEHUA/prebuilt/guest_gfx/$NATIVE_ARCH/lib" ]; then
+    mkdir -p "$BIN/guest_gfx"
+    cp -a "$WINEHUA/prebuilt/guest_gfx/$NATIVE_ARCH/"* "$BIN/guest_gfx/"
+    log "  guest_gfx ($NATIVE_ARCH): $(ls "$BIN/guest_gfx/lib"/*.so* 2>/dev/null | wc -l) .so files"
+else
+    log "  guest_gfx: SKIP (prebuilt/guest_gfx/$NATIVE_ARCH/lib not found)"
 fi
 
 cp "$SYSROOT/usr/lib/x86_64-linux-ohos/libc.so" "$HNP_LAYOUT/lib/x86_64/"
@@ -346,11 +391,13 @@ pick_lib() {
 
 pick_lib "libfreetype.so.6.20.2"        "libfreetype.so.6"   "libfreetype.so"
 pick_lib "libz.so"                      "libz.so"
-pick_lib "libwayland-client.so.0.22.0"  "libwayland-client.so.0"
-pick_lib "libxkbcommon.so.0.0.0"        "libxkbcommon.so.0"
-pick_lib "libxkbregistry.so.0.0.0"      "libxkbregistry.so.0"
-pick_lib "libxml2.so.2.12.0"            "libxml2.so.2"
-pick_lib "libffi.so.8.1.4"              "libffi.so.8"
+pick_lib "libwayland-client.so.0.22.0"  "libwayland-client.so.0"   "libwayland-client.so"
+pick_lib "libwayland-server.so.0.22.0"  "libwayland-server.so.0"   "libwayland-server.so"
+pick_lib "libwayland-egl.so.1.22.0"     "libwayland-egl.so.1"      "libwayland-egl.so"
+pick_lib "libxkbcommon.so.0.0.0"        "libxkbcommon.so.0"        "libxkbcommon.so"
+pick_lib "libxkbregistry.so.0.0.0"      "libxkbregistry.so.0"      "libxkbregistry.so"
+pick_lib "libxml2.so.2.12.0"            "libxml2.so.2"             "libxml2.so"
+pick_lib "libffi.so.8.1.4"              "libffi.so.8"              "libffi.so"
 log "  交叉编译依赖 → bin/x86_64-unix/"
 
 # libfreetype 需要同时放在 bin/ (Box64 按名 dlopen 搜索路径: .)
