@@ -661,10 +661,7 @@ ensure_wayland_dev_headers() {
 
 setup_build_env
 
-NATIVE_ARCH="${NATIVE_ARCH:-x86_64}"
-if [ "$NATIVE_ARCH" != "x86_64" ]; then
-    err "build_ohos_guest_gfx.sh currently supports NATIVE_ARCH=x86_64 only"
-fi
+# guest_gfx 始终编译为 x86_64-linux-ohos (Wine 是 x86_64 程序, 即使在 arm64 设备上也通过 Box64 运行)
 
 case "$PLATFORM" in
     wayland) ;;
