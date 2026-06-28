@@ -25,8 +25,10 @@
 #include <string>
 #include <thread>
 #include <atomic>
+#include <optional>
 #include <vector>
 #include <dlfcn.h>
+#include <sstream>
 
 #undef LOG_TAG
 #define LOG_TAG "WL_NAPI"
@@ -45,13 +47,19 @@ struct WineProcessEntry {
     bool running;
     int stdoutFd;
     std::shared_ptr<std::atomic<bool>> readerActive;
+    bool restoreGraphicsBackend = false;
+    winehua::GraphicsBackend graphicsBackendToRestore = winehua::GraphicsBackend::Shm;
 };
 
 static std::mutex gProcMutex;
 static std::vector<WineProcessEntry> gProcRegistry;
 
 // -- 注册表辅助函数 --
-static WineProcessEntry* AddProcess(pid_t pid, const std::string& exeFullPath, int stdoutFd) {
+static WineProcessEntry* AddProcess(pid_t pid,
+                                    const std::string& exeFullPath,
+                                    int stdoutFd,
+                                    bool restoreGraphicsBackend = false,
+                                    winehua::GraphicsBackend graphicsBackendToRestore = winehua::GraphicsBackend::Shm) {
     std::lock_guard<std::mutex> lock(gProcMutex);
     std::string basename = exeFullPath;
     auto slash = basename.find_last_of('/');
@@ -62,11 +70,25 @@ static WineProcessEntry* AddProcess(pid_t pid, const std::string& exeFullPath, i
         .exeFullPath = exeFullPath,
         .running = true,
         .stdoutFd = stdoutFd,
-        .readerActive = std::make_shared<std::atomic<bool>>(true)
+        .readerActive = std::make_shared<std::atomic<bool>>(true),
+        .restoreGraphicsBackend = restoreGraphicsBackend,
+        .graphicsBackendToRestore = graphicsBackendToRestore
     });
     OH_LOG_INFO(LOG_APP, "[ProcReg] add pid=%{public}d name=%{public}s total=%{public}zu",
                 pid, basename.c_str(), gProcRegistry.size());
     return &gProcRegistry.back();
+}
+
+static void RestoreGraphicsBackendAfterProcess(const WineProcessEntry& entry)
+{
+    if (!entry.restoreGraphicsBackend) return;
+
+    winehua::GraphicsBroker::GetInstance().SetRequestedBackend(entry.graphicsBackendToRestore);
+    OH_LOG_INFO(LOG_APP,
+                "[GFX] restored graphics backend after pid=%{public}d name=%{public}s backend=%{public}s",
+                entry.pid,
+                entry.exeBasename.c_str(),
+                winehua::GraphicsBroker::BackendName(entry.graphicsBackendToRestore));
 }
 
 static void RemoveProcess(pid_t pid) {
@@ -77,6 +99,7 @@ static void RemoveProcess(pid_t pid) {
                         pid, it->exeBasename.c_str(), gProcRegistry.size(), gProcRegistry.size() - 1);
             it->running = false;
             if (it->stdoutFd >= 0) { close(it->stdoutFd); it->stdoutFd = -1; }
+            RestoreGraphicsBackendAfterProcess(*it);
             gProcRegistry.erase(it);
             return;
         }
@@ -174,6 +197,18 @@ static void StartDetachedProcessWatcher(pid_t pid, const char* tag) {
         RemoveProcess(pid);
         NotifyProcessExited(pid);
     }).detach();
+}
+
+static void NotifyProcessRunning(pid_t pid, const char* origin) {
+    if (!gStateTsfn) return;
+
+    char msg[128];
+    if (origin && origin[0]) {
+        snprintf(msg, sizeof(msg), "%d:wine-running:%s", pid, origin);
+    } else {
+        snprintf(msg, sizeof(msg), "%d:wine-running", pid);
+    }
+    napi_call_threadsafe_function(gStateTsfn, strdup(msg), napi_tsfn_blocking);
 }
 
 // -- stderr pipe reader (后台线程, 逐行日志) --
@@ -395,6 +430,15 @@ static bool IsGraphicsSmokeExePath(const std::string& path) {
     return name == "winehua_graphics_smoke.exe";
 }
 
+static bool ContainsGraphicsSmokeArg(const std::vector<std::string>& args) {
+    for (const std::string& arg : args) {
+        if (IsGraphicsSmokeExePath(arg)) return true;
+    }
+    return false;
+}
+
+static void InstallBundledWineSamples(const std::string& binDir);
+
 static bool IsAudioSmokeExePath(const std::string& path) {
     std::string name = BasenameOfPath(path);
     std::transform(name.begin(), name.end(), name.begin(),
@@ -407,7 +451,7 @@ static void LogGraphicsBackendStateForLaunch(const char* tag) {
     OH_LOG_INFO(LOG_APP,
                 "[%{public}s] graphics requested=%{public}s active=%{public}s runtimeReady=%{public}s "
                 "guestReceiver=%{public}s(%{public}s) virglSocketReady=%{public}s virglLibraryPresent=%{public}s virglSmoke=%{public}s/%{public}s "
-                "transport=%{public}s",
+                "presenter=%{public}s zeroCopy=%{public}s damageUpload=%{public}s nativeBuffer=%{public}s fallback=%{public}s transport=%{public}s",
                 tag,
                 winehua::GraphicsBroker::BackendName(state.requested),
                 winehua::GraphicsBroker::BackendName(state.active),
@@ -418,6 +462,11 @@ static void LogGraphicsBackendStateForLaunch(const char* tag) {
                 state.virglLibraryPresent ? "true" : "false",
                 state.virglSmokeAttempted ? "attempted" : "skipped",
                 state.virglSmokeSucceeded ? "ok" : "fallback",
+                state.presenter.c_str(),
+                state.zeroCopyFramePath ? "true" : "false",
+                state.damageUploadActive ? "true" : "false",
+                state.caps.nativeBufferAvailable ? "true" : "false",
+                state.fallbackActive ? "true" : "false",
                 state.frameTransportMode.c_str());
     if (!state.virglSmokeError.empty()) {
         OH_LOG_WARN(LOG_APP, "[%{public}s] virgl smoke error: %{public}s", tag, state.virglSmokeError.c_str());
@@ -447,6 +496,67 @@ static void AppendWineLaunchArgsFromJs(napi_env env, napi_value value, std::vect
         arg.resize(copied);
         outArgs.push_back(std::move(arg));
     }
+}
+
+static bool ReadOptionalIntProperty(napi_env env,
+                                    napi_value obj,
+                                    const char* key,
+                                    int32_t* outValue) {
+    bool hasProperty = false;
+    napi_value value;
+
+    if (!outValue) return false;
+    if (napi_has_named_property(env, obj, key, &hasProperty) != napi_ok || !hasProperty) return false;
+    if (napi_get_named_property(env, obj, key, &value) != napi_ok) return false;
+    return napi_get_value_int32(env, value, outValue) == napi_ok;
+}
+
+static bool ReadOptionalStringProperty(napi_env env,
+                                       napi_value obj,
+                                       const char* key,
+                                       std::string* outValue) {
+    bool hasProperty = false;
+    napi_value value;
+    size_t strLen = 0;
+    size_t copied = 0;
+
+    if (!outValue) return false;
+    if (napi_has_named_property(env, obj, key, &hasProperty) != napi_ok || !hasProperty) return false;
+    if (napi_get_named_property(env, obj, key, &value) != napi_ok) return false;
+    if (napi_get_value_string_utf8(env, value, nullptr, 0, &strLen) != napi_ok) return false;
+
+    std::string str(strLen + 1, '\0');
+    if (napi_get_value_string_utf8(env, value, str.data(), strLen + 1, &copied) != napi_ok) return false;
+    str.resize(copied);
+    *outValue = std::move(str);
+    return true;
+}
+
+static void EnsureGraphicsSmokeRuntime(const std::string& binDir,
+                                       const std::string& sockDir,
+                                       winehua::GraphicsBackend* previousRequestedBackend,
+                                       bool* restoreGraphicsBackend) {
+    auto& graphicsBroker = winehua::GraphicsBroker::GetInstance();
+    winehua::GraphicsBackendState stateBefore = graphicsBroker.GetState();
+
+    if (previousRequestedBackend) *previousRequestedBackend = stateBefore.requested;
+    if (restoreGraphicsBackend) *restoreGraphicsBackend = false;
+
+    graphicsBroker.SetWineRuntimeBinaryDir(binDir);
+    if (stateBefore.requested != winehua::GraphicsBackend::Virgl) {
+        graphicsBroker.SetRequestedBackend(winehua::GraphicsBackend::Virgl);
+        if (restoreGraphicsBackend) *restoreGraphicsBackend = true;
+        OH_LOG_INFO(LOG_APP, "[Wine] temporarily switching graphics backend to virgl for graphics smoke");
+    }
+    graphicsBroker.EnsureStarted(sockDir);
+    InstallBundledWineSamples(binDir);
+    LogGraphicsBackendStateForLaunch("Wine");
+}
+
+static void AppendGraphicsSmokeEnv(std::vector<std::string>& envStrs) {
+    envStrs.push_back("WINEHUA_GRAPHICS_FORCE_GL=1");
+    envStrs.push_back("WINEHUA_OPENGL_DIAG=1");
+    envStrs.push_back("EGL_LOG_LEVEL=debug");
 }
 
 static void CleanupLegacyDriveZSampleMirror() {
@@ -977,8 +1087,8 @@ static napi_value LaunchClient(napi_env env, napi_callback_info info) {
 
 // -- NAPI: runWineExe -- 启动 wine <exe> (需先完成初始化) --
 static napi_value RunWineExe(napi_env env, napi_callback_info info) {
-    size_t argc = 5;
-    napi_value args[5];
+    size_t argc = 6;
+    napi_value args[6];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
     if (argc < 4) return nullptr;
 
@@ -1011,6 +1121,8 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
     std::vector<std::string> wineArgs;
     wineArgs.push_back(exePath);
     if (argc >= 5) AppendWineLaunchArgsFromJs(env, args[4], wineArgs);
+    std::string origin;
+    if (argc >= 6) ReadOptionalStringProperty(env, args[5], "origin", &origin);
 
     std::string sockStr(sockPath);
     auto pos = sockStr.find_last_of('/');
@@ -1022,33 +1134,37 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
 #endif
     auto& graphicsBroker = winehua::GraphicsBroker::GetInstance();
     bool isAudioSmoke = IsAudioSmokeExePath(exePath);
-    bool isGraphicsSmoke = IsGraphicsSmokeExePath(exePath);
+    bool isDirectGraphicsSmoke = IsGraphicsSmokeExePath(exePath);
+    bool isGraphicsSmoke = isDirectGraphicsSmoke || ContainsGraphicsSmokeArg(wineArgs);
     bool restoreGraphicsBackend = false;
     winehua::GraphicsBackend previousRequestedBackend = winehua::GraphicsBackend::Shm;
 
     if (isAudioSmoke) InstallBundledWineSamples(binDir);
-    graphicsBroker.SetWineRuntimeBinaryDir(binDir);
     if (isGraphicsSmoke) {
-        winehua::GraphicsBackendState stateBefore = graphicsBroker.GetState();
-        previousRequestedBackend = stateBefore.requested;
-        if (stateBefore.requested != winehua::GraphicsBackend::Virgl) {
-            graphicsBroker.SetRequestedBackend(winehua::GraphicsBackend::Virgl);
-            restoreGraphicsBackend = true;
-            OH_LOG_INFO(LOG_APP, "[Wine] temporarily switching graphics backend to virgl for graphics smoke");
-        }
+        EnsureGraphicsSmokeRuntime(binDir, sockDir, &previousRequestedBackend, &restoreGraphicsBackend);
+    } else {
+        graphicsBroker.SetWineRuntimeBinaryDir(binDir);
+        graphicsBroker.EnsureStarted(sockDir);
     }
-    graphicsBroker.EnsureStarted(sockDir);
-    if (isGraphicsSmoke) LogGraphicsBackendStateForLaunch("Wine");
 
     std::vector<std::string> envStrs = BuildWineEnv(sockDir, sockName, libPath, binDir, audioBootstrapFd);
-    if (restoreGraphicsBackend) {
+    auto restoreGraphicsBackendIfNeeded = [&]() {
+        if (!restoreGraphicsBackend) return;
         graphicsBroker.SetRequestedBackend(previousRequestedBackend);
-        OH_LOG_INFO(LOG_APP, "[Wine] restored graphics backend after graphics smoke env setup");
+        restoreGraphicsBackend = false;
+        OH_LOG_INFO(LOG_APP, "[Wine] restored graphics backend after graphics smoke launch failure");
+    };
+    if (restoreGraphicsBackend && !isDirectGraphicsSmoke) {
+        restoreGraphicsBackend = false;
+        OH_LOG_INFO(LOG_APP, "[Wine] keeping virgl backend active for indirect graphics smoke");
+    }
+    if (restoreGraphicsBackend) {
+        OH_LOG_INFO(LOG_APP,
+                    "[Wine] deferring graphics backend restore until graphics smoke exits: restore=%{public}s",
+                    winehua::GraphicsBroker::BackendName(previousRequestedBackend));
     }
     if (isGraphicsSmoke) {
-        envStrs.push_back("WINEHUA_GRAPHICS_FORCE_GL=1");
-        envStrs.push_back("WINEHUA_OPENGL_DIAG=1");
-        envStrs.push_back("EGL_LOG_LEVEL=debug");
+        AppendGraphicsSmokeEnv(envStrs);
         OH_LOG_INFO(LOG_APP, "[Wine] forcing graphics smoke to continue into OpenGL diagnostics");
     }
     std::vector<char*> envp;
@@ -1069,6 +1185,7 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
         int broker_fd = socket(AF_UNIX, SOCK_STREAM, 0);
         if (broker_fd < 0) {
             OH_LOG_ERROR(LOG_APP, "[Wine] broker socket failed: %{public}s", strerror(errno));
+            restoreGraphicsBackendIfNeeded();
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
             return nullptr;
         }
@@ -1079,6 +1196,7 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
         if (connect(broker_fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
             OH_LOG_ERROR(LOG_APP, "[Wine] broker connect failed: %{public}s", strerror(errno));
             close(broker_fd);
+            restoreGraphicsBackendIfNeeded();
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
             return nullptr;
         }
@@ -1099,6 +1217,7 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
         if (sendmsg(broker_fd, &msg, MSG_NOSIGNAL) < 0) {
             OH_LOG_ERROR(LOG_APP, "[Wine] broker sendmsg failed: %{public}s", strerror(errno));
             close(broker_fd);
+            restoreGraphicsBackendIfNeeded();
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
             return nullptr;
         }
@@ -1109,25 +1228,24 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
         close(broker_fd);
         if (n != sizeof(response) || response[1] != 0 || response[0] <= 0) {
             OH_LOG_ERROR(LOG_APP, "[Wine] broker spawn failed pid=%d status=%d", response[0], response[1]);
+            restoreGraphicsBackendIfNeeded();
             if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
             return nullptr;
         }
 
         pid_t pid = response[0];
-        AddProcess(pid, wineExe, -1);
+        AddProcess(pid, wineExe, -1, restoreGraphicsBackend, previousRequestedBackend);
+        restoreGraphicsBackend = false;
         StartDetachedProcessWatcher(pid, "broker-child");
         OH_LOG_INFO(LOG_APP, "[Wine] wine pid=%{public}d exe=%{public}s (via broker)", pid, wineExe);
-        if (gStateTsfn) {
-            char msg[64];
-            snprintf(msg, sizeof(msg), "%d:wine-running", pid);
-            napi_call_threadsafe_function(gStateTsfn, strdup(msg), napi_tsfn_blocking);
-        }
+        NotifyProcessRunning(pid, origin.c_str());
     }
 #else
     // PC/x86_64: fork + execve native wine directly (no Box64 emulation)
     int pipefd[2];
     if (pipe(pipefd) != 0) {
         OH_LOG_ERROR(LOG_APP, "[Wine] pipe failed: %{public}s", strerror(errno));
+        restoreGraphicsBackendIfNeeded();
         return nullptr;
     }
     fcntl(pipefd[0], F_SETFD, FD_CLOEXEC);
@@ -1157,18 +1275,16 @@ static napi_value RunWineExe(napi_env env, napi_callback_info info) {
 
     if (pid > 0) {
         close(pipefd[1]);
-        auto* entry = AddProcess(pid, wineExe, pipefd[0]);
+        auto* entry = AddProcess(pid, wineExe, pipefd[0], restoreGraphicsBackend, previousRequestedBackend);
+        restoreGraphicsBackend = false;
         std::thread(ReaderThread, pipefd[0], pid, entry->readerActive).detach();
         OH_LOG_INFO(LOG_APP, "[Wine] wine pid=%{public}d exe=%{public}s reader started", pid, wineExe);
-        if (gStateTsfn) {
-            char msg[64];
-            snprintf(msg, sizeof(msg), "%d:wine-running", pid);
-            napi_call_threadsafe_function(gStateTsfn, strdup(msg), napi_tsfn_blocking);
-        }
+        NotifyProcessRunning(pid, origin.c_str());
     } else {
         close(pipefd[0]);
         close(pipefd[1]);
         OH_LOG_ERROR(LOG_APP, "[Wine] wine fork failed");
+        restoreGraphicsBackendIfNeeded();
         if (gStateTsfn) napi_call_threadsafe_function(gStateTsfn, strdup("-1:wine-failed"), napi_tsfn_blocking);
     }
 #endif
@@ -1602,6 +1718,7 @@ static napi_value StopClient(napi_env, napi_callback_info) {
 // -- NAPI: stopAll — 杀掉所有 Wine 进程 + 停 Wayland server --
 static napi_value StopAll(napi_env, napi_callback_info) {
     KillAllProcesses();
+    PluginManager::GetInstance()->DestroyAllRenderers();
     winehua::GraphicsBroker::GetInstance().Stop();
     WaylandServer::GetInstance()->Stop();
     return nullptr;
@@ -1820,6 +1937,41 @@ static napi_value SetGraphicsBackend(napi_env env, napi_callback_info info) {
     return result;
 }
 
+static napi_value SetFramePresenter(napi_env env, napi_callback_info info) {
+    size_t argc = 1;
+    napi_value args[1];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    napi_value result;
+    napi_get_boolean(env, false, &result);
+    if (argc < 1) return result;
+
+    char presenterName[64] = {};
+    napi_get_value_string_utf8(env, args[0], presenterName, sizeof(presenterName), nullptr);
+
+    std::string requested = presenterName;
+    std::transform(requested.begin(), requested.end(), requested.begin(),
+                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+    if (requested.empty() || requested == "auto" || requested == "default") {
+        winehua::GraphicsBroker::GetInstance().SetPresenterOverride(std::nullopt);
+        OH_LOG_INFO(LOG_APP, "[GFX-NAPI] frame presenter override=auto");
+        napi_get_boolean(env, true, &result);
+        return result;
+    }
+
+    winehua::FramePresenterPath presenterPath;
+    if (!winehua::ParseFramePresenterPathName(requested, &presenterPath)) {
+        OH_LOG_WARN(LOG_APP, "[GFX-NAPI] unknown frame presenter %{public}s", presenterName);
+        return result;
+    }
+
+    winehua::GraphicsBroker::GetInstance().SetPresenterOverride(presenterPath);
+    OH_LOG_INFO(LOG_APP, "[GFX-NAPI] frame presenter override=%{public}s",
+                winehua::FramePresenterPathName(presenterPath));
+    napi_get_boolean(env, true, &result);
+    return result;
+}
+
 static napi_value GetGraphicsBackendState(napi_env env, napi_callback_info) {
     winehua::GraphicsBackendState state = winehua::GraphicsBroker::GetInstance().GetState();
 
@@ -1839,6 +1991,8 @@ static napi_value GetGraphicsBackendState(napi_env env, napi_callback_info) {
 
     set_string("requested", winehua::GraphicsBroker::BackendName(state.requested));
     set_string("active", winehua::GraphicsBroker::BackendName(state.active));
+    set_string("backend", state.backend);
+    set_string("presenter", state.presenter);
     set_bool("runtimeReady", state.runtimeReady);
     set_bool("guestReceiverPresent", state.guestReceiverPresent);
     set_string("guestReceiverRuntimeDir", state.guestReceiverRuntimeDir);
@@ -1848,13 +2002,64 @@ static napi_value GetGraphicsBackendState(napi_env env, napi_callback_info) {
     set_bool("virglLibraryPresent", state.virglLibraryPresent);
     set_bool("virglSmokeAttempted", state.virglSmokeAttempted);
     set_bool("virglSmokeSucceeded", state.virglSmokeSucceeded);
+    set_bool("fallbackActive", state.fallbackActive);
+    set_bool("damageUploadActive", state.damageUploadActive);
     set_bool("zeroCopyFramePath", state.zeroCopyFramePath);
+    set_bool("nativeBufferInUse", state.nativeBufferInUse);
     set_string("runtimeDir", state.runtimeDir);
     set_string("virglSocketPath", state.virglSocketPath);
     set_string("virglLibraryPath", state.virglLibraryPath);
     set_string("frameTransportMode", state.frameTransportMode);
     set_string("virglSmokeError", state.virglSmokeError);
     set_string("lastError", state.lastError);
+
+    napi_value capsObj;
+    napi_create_object(env, &capsObj);
+    auto set_caps_bool = [&](const char* key, bool value) {
+        napi_value v;
+        napi_get_boolean(env, value, &v);
+        napi_set_named_property(env, capsObj, key, v);
+    };
+    set_caps_bool("virglAvailable", state.caps.virglAvailable);
+    set_caps_bool("xcomponentEglAvailable", state.caps.xcomponentEglAvailable);
+    set_caps_bool("glCompositorAvailable", state.caps.glCompositorAvailable);
+    set_caps_bool("nativeBufferAvailable", state.caps.nativeBufferAvailable);
+    set_caps_bool("eglImageAvailable", state.caps.eglImageAvailable);
+    set_caps_bool("dmaBufAvailable", state.caps.dmaBufAvailable);
+    napi_set_named_property(env, obj, "caps", capsObj);
+
+    napi_value statsObj;
+    napi_create_object(env, &statsObj);
+    auto set_u64 = [&](const char* key, uint64_t value) {
+        napi_value v;
+        napi_create_bigint_uint64(env, value, &v);
+        napi_set_named_property(env, statsObj, key, v);
+    };
+    auto set_double = [&](const char* key, double value) {
+        napi_value v;
+        napi_create_double(env, value, &v);
+        napi_set_named_property(env, statsObj, key, v);
+    };
+    set_u64("frameCount", state.stats.frameCount);
+    set_u64("cpuCopyBytes", state.stats.cpuCopyBytes);
+    set_u64("surfaceCommitCount", state.stats.surfaceCommitCount);
+    set_u64("surfaceCommitBytes", state.stats.surfaceCommitBytes);
+    set_u64("snapshotCopyCount", state.stats.snapshotCopyCount);
+    set_u64("snapshotCopyBytes", state.stats.snapshotCopyBytes);
+    set_u64("glUploadBytes", state.stats.glUploadBytes);
+    set_u64("skippedFrames", state.stats.skippedFrames);
+    set_u64("damagePixels", state.stats.damagePixels);
+    set_u64("damageRectCount", state.stats.damageRectCount);
+    set_u64("mergedDamagePixels", state.stats.mergedDamagePixels);
+    set_u64("fullSurfaceDamageCount", state.stats.fullSurfaceDamageCount);
+    set_u64("partialDamageCount", state.stats.partialDamageCount);
+    set_u64("fullUploadFrames", state.stats.fullUploadFrames);
+    set_u64("partialUploadFrames", state.stats.partialUploadFrames);
+    set_double("lastPresentMs", state.stats.lastPresentMs);
+    set_double("avgPresentMs", state.stats.avgPresentMs);
+    set_double("lastUploadMs", state.stats.lastUploadMs);
+    set_double("avgUploadMs", state.stats.avgUploadMs);
+    napi_set_named_property(env, obj, "stats", statsObj);
     return obj;
 }
 
@@ -2079,6 +2284,7 @@ static napi_value Init(napi_env env, napi_value exports) {
         {"setOutputSize",   nullptr, SetOutputSize,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setDisplayScale",  nullptr, SetDisplayScale,  nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setGraphicsBackend", nullptr, SetGraphicsBackend, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"setFramePresenter", nullptr, SetFramePresenter, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getGraphicsBackendState", nullptr, GetGraphicsBackendState, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"setDesktopMode",   nullptr, SetDesktopMode,   nullptr, nullptr, nullptr, napi_default, nullptr},
         {"getDesktopRootId", nullptr, GetDesktopRootId, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -1,7 +1,6 @@
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import testNapi from 'libentry.so';
-import { OH2EVDEV } from '../common/KeyMap';
-import { mapMouseButton } from '../common/MouseMap';
+import { GameSession } from '../service/GameSession';
+import { InputBridge } from '../service/InputBridge';
 
 const DOMAIN = 0x0000;
 
@@ -9,12 +8,13 @@ const DOMAIN = 0x0000;
 // 不再使用 libraryname='entry', 从根本上消除多窗口 XComponent exports 冲突
 class WineXComponentController extends XComponentController {
   toplevelId: number = 0;
+  private readonly session: GameSession = GameSession.getInstance();
 
   onSurfaceCreated(surfaceId: string): void {
     hilog.info(DOMAIN, 'WineWindow', '[Ctrl] onSurfaceCreated tl=%{public}d surfaceId=%{public}s',
       this.toplevelId, surfaceId);
     try {
-      testNapi.createRenderer(this.toplevelId, BigInt(surfaceId));
+      this.session.createRenderer(this.toplevelId, surfaceId);
     } catch (e) {
       hilog.error(DOMAIN, 'WineWindow', 'ERR onSurfaceCreated createRenderer: %{public}s', JSON.stringify(e));
     }
@@ -24,11 +24,7 @@ class WineXComponentController extends XComponentController {
     hilog.info(DOMAIN, 'WineWindow', '[Ctrl] onSurfaceChanged tl=%{public}d surfaceId=%{public}s rect=%{public}s',
       this.toplevelId, surfaceId, JSON.stringify(rect));
     try {
-      testNapi.resizeRenderer(this.toplevelId, rect.surfaceWidth, rect.surfaceHeight);
-      // surface 是物理像素, Wine 需要逻辑坐标 (effectiveScale=2.0)
-      const w = Math.round(rect.surfaceWidth / 2.0);
-      const h = Math.round(rect.surfaceHeight / 2.0);
-      testNapi.notifyToplevelResize(this.toplevelId, w, h);
+      this.session.resize(this.toplevelId, rect.surfaceWidth, rect.surfaceHeight);
     } catch (e) {
       hilog.error(DOMAIN, 'WineWindow', 'ERR onSurfaceChanged resizeRenderer: %{public}s', JSON.stringify(e));
     }
@@ -38,7 +34,7 @@ class WineXComponentController extends XComponentController {
     hilog.info(DOMAIN, 'WineWindow', '[Ctrl] onSurfaceDestroyed tl=%{public}d surfaceId=%{public}s',
       this.toplevelId, surfaceId);
     try {
-      testNapi.destroyRenderer(this.toplevelId);
+      this.session.destroyRenderer(this.toplevelId);
     } catch (e) {
       hilog.error(DOMAIN, 'WineWindow', 'ERR onSurfaceDestroyed destroyRenderer: %{public}s', JSON.stringify(e));
     }
@@ -49,13 +45,19 @@ class WineXComponentController extends XComponentController {
 @Component
 struct WineWindow {
   controller: WineXComponentController = new WineXComponentController();
+  session: GameSession = GameSession.getInstance();
+  inputBridge: InputBridge = new InputBridge();
   @State toplevelId: number = 0;
   @State surfacePxW: number = 1;
   @State surfacePxH: number = 1;
 
+  private vpToPx(value: number): number {
+    return this.getUIContext().vp2px(value);
+  }
+
   aboutToAppear(): void {
     // 关键: aboutToAppear 是 loadContent 的同步调用, 在下一个 Ability 覆盖前读取
-    this.toplevelId = testNapi.getCurrentToplevelId() as number;
+    this.toplevelId = this.session.getCurrentToplevelId();
     // 同步设置给 controller: 保证 onSurfaceCreated 拿到正确的 toplevelId
     this.controller.toplevelId = this.toplevelId;
     hilog.info(DOMAIN, 'WineWindow', 'aboutToAppear tl=%{public}d', this.toplevelId);
@@ -83,14 +85,13 @@ struct WineWindow {
     // -- 鼠标事件 --
     .onMouse((event: MouseEvent) => {
       if (this.toplevelId <= 0) return;
-      const px = vp2px(event.x);
-      const py = vp2px(event.y);
-      const btn = mapMouseButton(event.button);
       if (event.action !== MouseAction.Move) {
+        const px = this.vpToPx(event.x);
+        const py = this.vpToPx(event.y);
         hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] MOUSE tl=%{public}d action=%{public}d px=(%{public}d,%{public}d) btn=0x%{public}x',
-          this.toplevelId, event.action, Math.round(px), Math.round(py), btn);
+          this.toplevelId, event.action, Math.round(px), Math.round(py), event.button);
       }
-      testNapi.sendPointerEvent(this.toplevelId, event.action, px, py, btn);
+      this.inputBridge.onMouseEventForToplevel(this.toplevelId, event, (value: number) => this.vpToPx(value));
     })
 
     // -- 键盘事件 --
@@ -98,41 +99,17 @@ struct WineWindow {
       hilog.info(DOMAIN, 'KBD-PIPE', '[ArkTS] onKeyEvent keyCode=%{public}d type=%{public}d tl=%{public}d',
         event.keyCode, event.type, this.toplevelId);
       if (this.toplevelId <= 0) return;
-      event.stopPropagation();
-      const evdevCode = OH2EVDEV[event.keyCode] ?? 0;
-      if (evdevCode === 0) {
-        hilog.warn(DOMAIN, 'KBD-PIPE', '[ArkTS] KEY unmapped ohosCode=%{public}d', event.keyCode);
-        return;
-      }
-      const pressed = (event.type === KeyType.Down);
-      hilog.info(DOMAIN, 'KBD-PIPE', '[ArkTS] KEY ohos=%{public}d->evdev=%{public}d %{public}s',
-        this.toplevelId, event.keyCode, evdevCode, pressed ? 'DOWN' : 'UP');
-      testNapi.sendKeyEvent(this.toplevelId, evdevCode, pressed);
+      this.inputBridge.onKeyEventForToplevel(this.toplevelId, event);
     })
 
     // -- 滚轮事件 (轴事件, API 17+) --
     .onAxisEvent((event?: AxisEvent) => {
-      if (this.toplevelId <= 0 || !event) return;
-      const px = vp2px(event.x);
-      const py = vp2px(event.y);
-      const vert = event.getVerticalAxisValue();
-      const horiz = event.getHorizontalAxisValue();
-      const step = event.scrollStep ?? 0;
-      if (vert !== 0) {
-        hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] SCROLL tl=%{public}d vert=%{public}f step=%{public}d px=(%{public}d,%{public}d)',
-          this.toplevelId, vert, step, Math.round(px), Math.round(py));
-        testNapi.sendScrollEvent(this.toplevelId, 0, vert, step, px, py);
-      }
-      if (horiz !== 0) {
-        hilog.info(DOMAIN, 'CLICK-PIPE', '[ArkTS] SCROLL tl=%{public}d horiz=%{public}f step=%{public}d px=(%{public}d,%{public}d)',
-          this.toplevelId, horiz, step, Math.round(px), Math.round(py));
-        testNapi.sendScrollEvent(this.toplevelId, 1, horiz, step, px, py);
-      }
+      this.inputBridge.onAxisEventForToplevel(this.toplevelId, event, (value: number) => this.vpToPx(value));
     })
 
     .onAreaChange((_o: Area, n: Area) => {
-      this.surfacePxW = vp2px(n.width as number);
-      this.surfacePxH = vp2px(n.height as number);
+      this.surfacePxW = this.vpToPx(n.width as number);
+      this.surfacePxH = this.vpToPx(n.height as number);
     })
   }
 }

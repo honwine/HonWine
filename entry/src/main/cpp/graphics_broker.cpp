@@ -352,6 +352,10 @@ GraphicsBroker::GraphicsBroker()
     if (requested && ParseBackendName(requested, &backend)) {
         requestedBackend_ = backend;
     }
+
+    caps_.nativeBufferAvailable = false;
+    caps_.eglImageAvailable = false;
+    caps_.dmaBufAvailable = false;
 }
 
 void GraphicsBroker::SetWineRuntimeBinaryDir(const std::string& wineBinDir)
@@ -375,7 +379,7 @@ bool GraphicsBroker::EnsureStarted(const std::string& runtimeDir)
 
     RefreshGuestReceiverStateLocked();
     started_ = true;
-    if (requestedBackend_ == GraphicsBackend::Virgl) {
+    if (requestedBackend_ != GraphicsBackend::Shm) {
         RefreshVirglStateLocked();
         StartVirglSocketServerLocked();
         ProbeVirglRuntimeSmokeLocked();
@@ -401,6 +405,14 @@ void GraphicsBroker::Stop()
         activeBackend_ = GraphicsBackend::Shm;
         started_ = false;
         runtimeReady_ = false;
+        presenterPath_ = FramePresenterPath::CpuShmUpload;
+        presenterFallbackActive_ = false;
+        damageUploadActive_ = false;
+        zeroCopyFramePath_ = false;
+        nativeBufferInUse_ = false;
+        stats_ = {};
+        frameTransportMode_ = "wl_shm+cpu_copy+gl_upload";
+        presenterNote_.clear();
     }
 
     if (serverPid > 0)
@@ -417,7 +429,7 @@ void GraphicsBroker::SetRequestedBackend(GraphicsBackend backend)
 
     requestedBackend_ = backend;
     loggedVirglFallback_ = false;
-    if (started_ && requestedBackend_ == GraphicsBackend::Virgl) {
+    if (started_ && requestedBackend_ != GraphicsBackend::Shm) {
         RefreshVirglStateLocked();
         StartVirglSocketServerLocked();
         ProbeVirglRuntimeSmokeLocked();
@@ -427,6 +439,23 @@ void GraphicsBroker::SetRequestedBackend(GraphicsBackend backend)
     UpdateActiveBackendLocked();
 }
 
+void GraphicsBroker::SetPresenterOverride(std::optional<FramePresenterPath> presenterPath)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    presenterOverride_ = presenterPath;
+    OH_LOG_INFO(LOG_APP,
+                "[GraphicsBroker] presenter override=%{public}s",
+                presenterOverride_ ? FramePresenterPathName(*presenterOverride_) : "auto");
+}
+
+std::optional<FramePresenterPath> GraphicsBroker::GetPresenterOverride() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    return presenterOverride_;
+}
+
 GraphicsBackendState GraphicsBroker::GetState() const
 {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -434,6 +463,8 @@ GraphicsBackendState GraphicsBroker::GetState() const
     GraphicsBackendState state;
     state.requested = requestedBackend_;
     state.active = activeBackend_;
+    state.backend = BackendName(activeBackend_);
+    state.presenter = FramePresenterPathName(presenterPath_);
     state.runtimeReady = runtimeReady_;
     state.guestReceiverPresent = guestReceiverPresent_;
     state.guestReceiverRuntimeDir = guestReceiverRuntimeDir_;
@@ -443,20 +474,59 @@ GraphicsBackendState GraphicsBroker::GetState() const
     state.virglLibraryPresent = virglLibraryPresent_;
     state.virglSmokeAttempted = virglSmokeAttempted_;
     state.virglSmokeSucceeded = virglSmokeSucceeded_;
-    state.zeroCopyFramePath = false;
+    state.fallbackActive = presenterFallbackActive_ ||
+                           ((requestedBackend_ == GraphicsBackend::Virgl || requestedBackend_ == GraphicsBackend::Auto) &&
+                            activeBackend_ != GraphicsBackend::Virgl);
+    state.damageUploadActive = damageUploadActive_;
+    state.zeroCopyFramePath = zeroCopyFramePath_;
+    state.nativeBufferInUse = nativeBufferInUse_;
     state.runtimeDir = runtimeDir_;
     state.virglSocketPath = virglSocketPath_;
     state.virglLibraryPath = virglLibraryPath_;
-    state.frameTransportMode = "wl_shm+cpu_copy+gl_upload";
+    state.frameTransportMode = frameTransportMode_;
     state.virglSmokeError = virglSmokeError_;
-    state.lastError = lastError_;
+    state.lastError = presenterNote_.empty() ? lastError_ : presenterNote_;
+    state.caps = caps_;
+    state.caps.virglAvailable = runtimeReady_ && virglLibraryPresent_ && virglSocketReady_ && guestReceiverPresent_;
+    state.stats = stats_;
+    WaylandServer::CopyStats copyStats = WaylandServer::GetInstance()->GetGraphicsCopyStats();
+    state.stats.surfaceCommitCount = copyStats.surfaceCommitCount;
+    state.stats.surfaceCommitBytes = copyStats.surfaceCommitBytes;
+    state.stats.snapshotCopyCount = copyStats.snapshotCopyCount;
+    state.stats.snapshotCopyBytes = copyStats.snapshotCopyBytes;
+    state.stats.cpuCopyBytes = state.stats.surfaceCommitBytes + state.stats.snapshotCopyBytes;
     return state;
 }
 
-void GraphicsBroker::AppendWineEnv(std::vector<std::string>& env) const
+void GraphicsBroker::ReportPresenterState(FramePresenterPath path,
+                                          bool fallbackActive,
+                                          bool damageUploadActive,
+                                          bool zeroCopyFramePath,
+                                          bool nativeBufferInUse,
+                                          const BackendCaps& caps,
+                                          const GraphicsStats& stats,
+                                          const std::string& transportMode,
+                                          const std::string& note)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+
+    presenterPath_ = path;
+    presenterFallbackActive_ = fallbackActive;
+    damageUploadActive_ = damageUploadActive;
+    zeroCopyFramePath_ = zeroCopyFramePath;
+    nativeBufferInUse_ = nativeBufferInUse;
+    caps_ = caps;
+    caps_.virglAvailable = runtimeReady_ && virglLibraryPresent_ && virglSocketReady_ && guestReceiverPresent_;
+    stats_ = stats;
+    frameTransportMode_ = transportMode.empty() ? std::string("wl_shm+cpu_copy+gl_upload") : transportMode;
+    presenterNote_ = note;
+}
+
+std::vector<std::string> GraphicsBroker::BuildWineEnvOverrides() const
 {
     GraphicsBackendState state = GetState();
     std::vector<std::string> guestEnv;
+    std::vector<std::string> env;
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -466,7 +536,11 @@ void GraphicsBroker::AppendWineEnv(std::vector<std::string>& env) const
     env.push_back("WINEHUA_GRAPHICS_BACKEND=" + std::string(BackendName(state.requested)));
     env.push_back("WINEHUA_GRAPHICS_ACTIVE=" + std::string(BackendName(state.active)));
     env.push_back(std::string("WINEHUA_SHM_FALLBACK=") + (state.active == GraphicsBackend::Shm ? "1" : "0"));
-    env.push_back("WINEHUA_FRAME_ZERO_COPY=0");
+    env.push_back("WINEHUA_FRAME_PRESENTER=" + state.presenter);
+    env.push_back(std::string("WINEHUA_FRAME_FALLBACK=") + (state.fallbackActive ? "1" : "0"));
+    env.push_back(std::string("WINEHUA_FRAME_DAMAGE_UPLOAD=") + (state.damageUploadActive ? "1" : "0"));
+    env.push_back(std::string("WINEHUA_FRAME_ZERO_COPY=") + (state.zeroCopyFramePath ? "1" : "0"));
+    env.push_back(std::string("WINEHUA_NATIVE_BUFFER_AVAILABLE=") + (state.caps.nativeBufferAvailable ? "1" : "0"));
     env.push_back("WINEHUA_FRAME_TRANSPORT=" + state.frameTransportMode);
     env.push_back(std::string("WINEHUA_GUEST_GFX_READY=") + (state.guestReceiverPresent ? "1" : "0"));
     env.push_back("WINEHUA_GUEST_GFX_MODE=" + (state.guestReceiverMode.empty() ? std::string("stock-egl")
@@ -484,6 +558,14 @@ void GraphicsBroker::AppendWineEnv(std::vector<std::string>& env) const
         for (const std::string& extra : guestEnv) env.push_back(extra);
         if (!state.virglSocketPath.empty()) env.push_back("VTEST_SOCKET_NAME=" + state.virglSocketPath);
     }
+
+    return env;
+}
+
+void GraphicsBroker::AppendWineEnv(std::vector<std::string>& env) const
+{
+    std::vector<std::string> overrides = BuildWineEnvOverrides();
+    env.insert(env.end(), overrides.begin(), overrides.end());
 }
 
 bool GraphicsBroker::TakeFrameForToplevel(uint32_t rendererToplevelId,
@@ -505,6 +587,8 @@ bool GraphicsBroker::TakeFrameForToplevel(uint32_t rendererToplevelId,
 const char* GraphicsBroker::BackendName(GraphicsBackend backend)
 {
     switch (backend) {
+    case GraphicsBackend::Auto:
+        return "auto";
     case GraphicsBackend::Virgl:
         return "virgl";
     case GraphicsBackend::Shm:
@@ -518,6 +602,10 @@ bool GraphicsBroker::ParseBackendName(const std::string& name, GraphicsBackend* 
     if (!outBackend) return false;
 
     std::string lower = ToLower(name);
+    if (lower == "auto") {
+        *outBackend = GraphicsBackend::Auto;
+        return true;
+    }
     if (lower == "shm") {
         *outBackend = GraphicsBackend::Shm;
         return true;

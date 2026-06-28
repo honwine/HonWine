@@ -62,6 +62,11 @@ export class WineWindowManager {
     return this.mainWindow;
   }
 
+  getEffectiveScale(): number {
+    const scale = this.displayScale * this.scaleBoost;
+    return scale > 0 ? scale : 2.0;
+  }
+
   // -- dump 当前状态 (诊断用) --
   dumpState(): void {
     hilog.info(DOMAIN, TAG, '[MW-DUMP] state: abilityCtx=%{public}d windows=%{public}d pendingStarts=%{public}d pendingEvents=%{public}d destroyed=%{public}d',
@@ -80,8 +85,13 @@ export class WineWindowManager {
 
   async init(windowStage: window.WindowStage, abilityContext: common.UIAbilityContext): Promise<void> {
     this.windowStage = windowStage;
-    this.mainWindow = windowStage.getMainWindowSync();
     this.uiAbilityContext = abilityContext;
+    try {
+      this.mainWindow = windowStage.getMainWindowSync();
+    } catch (e) {
+      this.mainWindow = null;
+      hilog.warn(DOMAIN, TAG, '[MW] getMainWindowSync failed: %{public}s', JSON.stringify(e));
+    }
 
     hilog.info(DOMAIN, TAG, '[MW] init: mainWindow=%{public}s ctx=%{public}s',
       this.mainWindow ? 'ok' : 'NULL', this.uiAbilityContext ? 'ok' : 'NULL');
@@ -89,8 +99,12 @@ export class WineWindowManager {
     // Tablet 检测: 桌面合成模式
     this.isDesktopMode = deviceInfo.deviceType === 'tablet';
     if (this.isDesktopMode) {
-      testNapi.setDesktopMode(true);
+      try {
+        testNapi.setDesktopMode(true);
       hilog.info(DOMAIN, TAG, '[MW] Tablet → DESKTOP MODE (single XComponent)');
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, '[MW] setDesktopMode(true) failed: %{public}s', JSON.stringify(e));
+      }
     } else {
       hilog.info(DOMAIN, TAG, '[MW] deviceType=%{public}s → MANAGED MODE', deviceInfo.deviceType);
     }
@@ -102,7 +116,11 @@ export class WineWindowManager {
       this.scaleBoost = 2.0 / this.displayScale;  // 使 effectiveScale = 2.0
       hilog.info(DOMAIN, TAG, '[MW] display %{public}dx%{public}d deviceDPI=%{public}s boost=%{public}s -> effective=2.0',
         d.width, d.height, this.displayScale.toFixed(2), this.scaleBoost.toFixed(2));
-      testNapi.setDisplayScale(this.displayScale * this.scaleBoost);
+      try {
+        testNapi.setDisplayScale(this.displayScale * this.scaleBoost);
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, '[MW] setDisplayScale failed: %{public}s', JSON.stringify(e));
+      }
 
       // Wine 输出尺寸
       const s = this.displayScale * this.scaleBoost;
@@ -127,21 +145,33 @@ export class WineWindowManager {
           hilog.warn(DOMAIN, TAG, '[MW] avoid area query failed, using display size');
         }
       }
-      testNapi.setOutputSize(outW, outH);
+      try {
+        testNapi.setOutputSize(outW, outH);
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, '[MW] setOutputSize failed: %{public}s', JSON.stringify(e));
+      }
     } catch (_) {
       this.displayScale = 1.61;
       this.scaleBoost = 2.0 / 1.61;
       hilog.warn(DOMAIN, TAG, '[MW] display query failed, using displayScale=1.61 boost=1.24');
-      testNapi.setDisplayScale(this.displayScale * this.scaleBoost);
+      try {
+        testNapi.setDisplayScale(this.displayScale * this.scaleBoost);
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, '[MW] setDisplayScale fallback failed: %{public}s', JSON.stringify(e));
+      }
     }
 
     hilog.info(DOMAIN, TAG, '[MW] registering toplevel callback...');
-    testNapi.setToplevelCallback((id: number, event: string, data: string) => {
-      hilog.info(DOMAIN, TAG, '[MW]  cb toplevel #%{public}d event=%{public}s data=%{public}s',
-        id, event, data);
-      this.onToplevelEvent(id, event, data);
-    });
-    hilog.info(DOMAIN, TAG, '[MW] toplevel callback registered OK');
+    try {
+      testNapi.setToplevelCallback((id: number, event: string, data: string) => {
+        hilog.info(DOMAIN, TAG, '[MW]  cb toplevel #%{public}d event=%{public}s data=%{public}s',
+          id, event, data);
+        this.onToplevelEvent(id, event, data);
+      });
+      hilog.info(DOMAIN, TAG, '[MW] toplevel callback registered OK');
+    } catch (e) {
+      hilog.error(DOMAIN, TAG, '[MW] setToplevelCallback failed: %{public}s', JSON.stringify(e));
+    }
   }
 
   // -- WineWindowAbility 调用: 注册 / 注销 --
@@ -229,8 +259,13 @@ export class WineWindowManager {
     // 2. loadContent 会把窗口标题重置为默认值, 需重新应用 Wine 标题
     const title = this.lastTitles.get(toplevelId);
     if (title) {
-      hilog.info(DOMAIN, TAG, '[MW] onAfterLoadContent #%{public}d: reapply title "%{public}s"', toplevelId, title);
-      win.setWindowTitle(title);
+      try {
+        hilog.info(DOMAIN, TAG, '[MW] onAfterLoadContent #%{public}d: reapply title "%{public}s"', toplevelId, title);
+        win.setWindowTitle(title);
+      } catch (e) {
+        hilog.warn(DOMAIN, TAG, '[MW] onAfterLoadContent #%{public}d: setWindowTitle failed: %{public}s',
+          toplevelId, JSON.stringify(e));
+      }
     }
   }
 

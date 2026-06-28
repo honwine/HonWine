@@ -52,7 +52,7 @@ $BuildScript = Join-Path $RepoRoot 'scripts\rebuild_harmony.sh'
 $SignedHap = Join-Path $RepoRoot 'entry\build\default\outputs\default\entry-default-signed.hap'
 $BundleName = 'app.hackeris.winehua'
 $AbilityName = 'EntryAbility'
-$LogPattern = 'wine|winehua_audio_smoke|winehua_graphics_smoke|MediaReg|AudioBroker|quartz|mci|mp3dmod|devenum|Alarm01|testTag|MW-NAPI|WL-|WineWM|cmd\.exe|notepad\.exe|c0000135|wineboot|wineserver|Mono|Gecko|prefix'
+$LogPattern = 'wine|winehua_audio_smoke|winehua_graphics_smoke|GraphicsStats|GraphicsBroker|MediaReg|AudioBroker|quartz|mci|mp3dmod|devenum|Alarm01|testTag|MW-NAPI|WL-|WineWM|cmd\.exe|notepad\.exe|c0000135|wineboot|wineserver|Mono|Gecko|prefix'
 
 function Write-Info {
     param([string]$Message)

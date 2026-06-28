@@ -1,8 +1,10 @@
 #include "egl_renderer.h"
+
+#include "backend_detector.h"
+#include "cpu_shm_presenter.h"
+#include "gl_compositor_presenter.h"
 #include "graphics_broker.h"
-#include "wayland_server.h"
-#include "fps_counter.h"
-#include <vector>
+
 #include <mutex>
 #include <unistd.h>
 
@@ -10,9 +12,12 @@
 #define LOG_TAG "WL_EGL"
 #include <hilog/log.h>
 
-// -- 共享 EGLDisplay: 整个进程只初始化一次, 避免反复 init/terminate 导致 GPU 驱动竞争 --
-static EGLDisplay gSharedDisplay = EGL_NO_DISPLAY;
-static std::once_flag gDisplayOnce;
+namespace {
+
+EGLDisplay gSharedDisplay = EGL_NO_DISPLAY;
+std::once_flag gDisplayOnce;
+
+} // namespace
 
 float EglRenderer::globalDisplayScale_ = 1.0f;
 
@@ -23,7 +28,8 @@ EGLDisplay EglRenderer::GetSharedDisplay() {
             OH_LOG_ERROR(LOG_APP, "[EGL] eglGetDisplay FAILED");
             return;
         }
-        EGLint major, minor;
+        EGLint major = 0;
+        EGLint minor = 0;
         if (!eglInitialize(gSharedDisplay, &major, &minor)) {
             OH_LOG_ERROR(LOG_APP, "[EGL] eglInitialize FAILED: 0x%{public}x", eglGetError());
             gSharedDisplay = EGL_NO_DISPLAY;
@@ -34,52 +40,22 @@ EGLDisplay EglRenderer::GetSharedDisplay() {
     return gSharedDisplay;
 }
 
-// -- 全屏 quad 着色器 (Wayland ARGB = BGRA 内存序, 像素着色器中 swizzle) --
-static const char* kVS = R"(#version 300 es
-layout(location=0) in vec2 aPos;
-layout(location=1) in vec2 aUV;
-out vec2 vUV;
-void main() { vUV = aUV; gl_Position = vec4(aPos, 0, 1); }
-)";
-
-static const char* kFS = R"(#version 300 es
-precision mediump float;
-in vec2 vUV;
-out vec4 oColor;
-uniform sampler2D uTex;
-void main() { oColor = vec4(texture(uTex, vUV).bgr, 1.0); }
-)";
-
-static GLuint CompileShader(GLenum type, const char* src) {
-    GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, nullptr);
-    glCompileShader(s);
-    GLint ok = 0;
-    glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
-    if (!ok) {
-        char log[1024] = {};
-        glGetShaderInfoLog(s, sizeof(log), nullptr, log);
-        OH_LOG_ERROR(LOG_APP, "[EGL] shader compile: %{public}s", log);
-    }
-    return s;
-}
-
-bool EglRenderer::Init(OHNativeWindow* window, int w, int h) {
+bool EglRenderer::Init(OHNativeWindow* window, uint32_t toplevelId, int w, int h) {
     window_ = window;
+    toplevelId_ = toplevelId;
     width_ = w;
     height_ = h;
 
     OH_LOG_INFO(LOG_APP, "[EGL] Init tl=%{public}u req=%{public}dx%{public}d", toplevelId_, w, h);
 
-    // 1. 使用共享 EGLDisplay (全进程只 init 一次)
     display_ = GetSharedDisplay();
     if (display_ == EGL_NO_DISPLAY) {
         OH_LOG_ERROR(LOG_APP, "[EGL] shared display unavailable tl=%{public}u", toplevelId_);
         return false;
     }
 
-    EGLConfig cfg;
-    EGLint nCfg;
+    EGLConfig cfg = nullptr;
+    EGLint nCfg = 0;
     EGLint attrs[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
@@ -90,115 +66,95 @@ bool EglRenderer::Init(OHNativeWindow* window, int w, int h) {
 
     EGLint ctxAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
     context_ = eglCreateContext(display_, cfg, EGL_NO_CONTEXT, ctxAttrs);
-
-    // OHOS: EGLNativeWindowType = OHNativeWindow* (cast to unsigned long)
     surface_ = eglCreateWindowSurface(display_, cfg,
-                                       reinterpret_cast<EGLNativeWindowType>(window_), nullptr);
+                                      reinterpret_cast<EGLNativeWindowType>(window_), nullptr);
     if (surface_ == EGL_NO_SURFACE) {
-        OH_LOG_ERROR(LOG_APP, "[EGL] eglCreateWindowSurface failed tl=%{public}u: 0x%{public}x", toplevelId_, eglGetError());
+        OH_LOG_ERROR(LOG_APP, "[EGL] eglCreateWindowSurface failed tl=%{public}u: 0x%{public}x",
+                     toplevelId_, eglGetError());
         return false;
-    }
-    {
-        EGLint sw = 0, sh = 0;
-        eglQuerySurface(display_, surface_, EGL_WIDTH, &sw);
-        eglQuerySurface(display_, surface_, EGL_HEIGHT, &sh);
-        OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u eglSurface %{public}dx%{public}d", toplevelId_, sw, sh);
     }
 
     running_ = true;
     thread_ = std::thread(&EglRenderer::RenderLoop, this);
-    OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u Init done, render thread started OK", toplevelId_);
+    OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u Init done, render thread started", toplevelId_);
     return true;
+}
+
+bool EglRenderer::SwitchPresenter(winehua::FramePresenterPath requestedPath,
+                                  bool fallbackActive,
+                                  const std::string& reason) {
+    std::unique_ptr<winehua::IFramePresenter> presenter;
+
+    if (requestedPath == winehua::FramePresenterPath::GlCompositorDirect) {
+        presenter = std::make_unique<winehua::GlCompositorPresenter>();
+    } else {
+        presenter = std::make_unique<winehua::CpuShmPresenter>();
+    }
+
+    if (!presenter->Init(display_, context_, surface_)) {
+        std::string error = presenter->LastError();
+        if (error.empty()) error = "presenter init failed";
+        if (requestedPath != winehua::FramePresenterPath::CpuShmUpload) {
+            OH_LOG_WARN(LOG_APP,
+                        "[EGL] tl=%{public}u presenter %{public}s init failed (%{public}s), falling back to cpu",
+                        toplevelId_,
+                        winehua::FramePresenterPathName(requestedPath),
+                        error.c_str());
+            return SwitchPresenter(winehua::FramePresenterPath::CpuShmUpload, true,
+                                   "fallback: " + error);
+        }
+
+        OH_LOG_ERROR(LOG_APP, "[EGL] tl=%{public}u cpu presenter init failed: %{public}s",
+                     toplevelId_, error.c_str());
+        return false;
+    }
+
+    if (presenter_) presenter_->Destroy();
+    presenter_ = std::move(presenter);
+    presenterFallbackActive_ = fallbackActive;
+    presenterSelectionNote_ = reason;
+    PublishPresenterState();
+    OH_LOG_INFO(LOG_APP,
+                "[EGL] tl=%{public}u presenter=%{public}s fallback=%{public}s note=%{public}s",
+                toplevelId_,
+                winehua::FramePresenterPathName(presenter_->Path()),
+                presenterFallbackActive_ ? "true" : "false",
+                presenterSelectionNote_.empty() ? "(none)" : presenterSelectionNote_.c_str());
+    return true;
+}
+
+void EglRenderer::PublishPresenterState(const std::string& note) const {
+    if (!presenter_) return;
+
+    std::string effectiveNote = note;
+    if (effectiveNote.empty() && presenterFallbackActive_) effectiveNote = presenterSelectionNote_;
+
+    winehua::GraphicsBroker::GetInstance().ReportPresenterState(
+        presenter_->Path(),
+        presenterFallbackActive_,
+        presenter_->UsesDamageUpload(),
+        presenter_->ZeroCopy(),
+        false,
+        presenterCaps_,
+        presenter_->GetStats(),
+        presenter_->TransportMode(),
+        effectiveNote);
 }
 
 void EglRenderer::RenderLoop() {
     if (!eglMakeCurrent(display_, surface_, surface_, context_)) {
-        OH_LOG_ERROR(LOG_APP, "[EGL] eglMakeCurrent failed: 0x%{public}x", eglGetError());
+        OH_LOG_ERROR(LOG_APP, "[EGL] eglMakeCurrent failed tl=%{public}u: 0x%{public}x",
+                     toplevelId_, eglGetError());
         return;
     }
 
-    // 2. 着色器
-    GLuint vs = CompileShader(GL_VERTEX_SHADER, kVS);
-    GLuint fs = CompileShader(GL_FRAGMENT_SHADER, kFS);
-    program_ = glCreateProgram();
-    glAttachShader(program_, vs);
-    glAttachShader(program_, fs);
-    glLinkProgram(program_);
-
-    // 3. 全屏 quad VBO
-    float quad[] = {
-        -1,-1, 0,1,   1,-1, 1,1,   -1, 1, 0,0,
-         1,-1, 1,1,   1, 1, 1,0,   -1, 1, 0,0,
-    };
-    glGenBuffers(1, &vbo_);
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STATIC_DRAW);
-
-    // 4. 纹理 (初始空)
-    glGenTextures(1, &texture_);
-    glBindTexture(GL_TEXTURE_2D, texture_);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    // 5. 渲染循环: 60fps, 每帧按 toplevelId 取帧
-    FpsCounter fps("render");
-    std::vector<uint8_t> px;
-    int fw = 0, fh = 0;
-    int loopCount = 0;
-    bool firstFrameLogged = false;
-    bool rendered = false;  // 首帧已渲染后, 无新帧时跳过 GPU 绘制
-
-    OH_LOG_INFO(LOG_APP, "[MW-RNDR] tl=%{public}u render loop started", toplevelId_);
+    winehua::BackendSelection selection = winehua::BackendDetector::Detect(display_, context_, surface_);
+    presenterCaps_ = selection.caps;
+    if (!SwitchPresenter(selection.preferredPath, selection.fallback, selection.reason)) return;
 
     while (running_) {
-        bool haveFrame = false;
-        uint32_t useToplevel = toplevelId_;
-        haveFrame = winehua::GraphicsBroker::GetInstance().TakeFrameForToplevel(
-            toplevelId_, px, fw, fh, &useToplevel);
-
-        if (haveFrame && fw > 0 && fh > 0) {
-            // 存储帧尺寸供输入坐标转换
-            frameW_ = fw;
-            frameH_ = fh;
-            if (!firstFrameLogged) {
-                OH_LOG_INFO(LOG_APP, "[MW-RNDR] tl=%{public}u  FIRST FRAME %{public}dx%{public}d px=%{public}zu",
-                            useToplevel, fw, fh, px.size());
-                firstFrameLogged = true;
-            }
-            glBindTexture(GL_TEXTURE_2D, texture_);
-            int rowLen = (int)px.size() / fh / 4;
-            if (rowLen != fw) {
-                OH_LOG_WARN(LOG_APP, "[MW-RNDR] UNPACK_ROW_LENGTH rowLen=%{public}d fw=%{public}d px=%{public}zu fh=%{public}d",
-                            rowLen, fw, px.size(), fh);
-                glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLen);
-            }
-            // 首帧/尺寸变化: glTexImage2D (分配 GPU 内存)
-            // 同尺寸: glTexSubImage2D (复用, 仅 memcpy → GPU)
-            if (fw != texW_ || fh != texH_) {
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, fw, fh, 0,
-                             GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-                texW_ = fw; texH_ = fh;
-            } else {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, fw, fh,
-                                GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-            }
-            if (rowLen != fw) {
-                glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-            }
-            rendered = true;
-        }
-
-        // 无新帧且已渲染过首帧 → 跳过 GPU 绘制, 静态桌面节省 GPU 功耗
-        if (!haveFrame && rendered) {
-            usleep(16667);
-            loopCount++;
-            continue;
-        }
-
-        // 获取 EGL surface 实际大小
-        EGLint surfW = 0, surfH = 0;
+        EGLint surfW = 0;
+        EGLint surfH = 0;
         eglQuerySurface(display_, surface_, EGL_WIDTH, &surfW);
         eglQuerySurface(display_, surface_, EGL_HEIGHT, &surfH);
         if (surfW > 0 && surfH > 0) {
@@ -206,67 +162,47 @@ void EglRenderer::RenderLoop() {
             height_ = surfH;
         }
 
-        // Letterbox 视口: 保持 Wine 帧宽高比, 居中渲染, 左右或上下黑边
-        if (fw > 0 && fh > 0 && width_ > 0 && height_ > 0) {
-            float frameAspect = (float)fw / fh;
-            float surfAspect = (float)width_ / height_;
-            if (surfAspect > frameAspect) {
-                // Surface 比帧更宽 -> 左右黑边
-                vpH_ = height_;
-                vpW_ = (int)(height_ * frameAspect);
-                vpX_ = (width_ - vpW_) / 2;
-                vpY_ = 0;
-            } else {
-                // Surface 比帧更高 -> 上下黑边 (常见: 手机竖屏)
-                vpW_ = width_;
-                vpH_ = (int)(width_ / frameAspect);
-                vpX_ = 0;
-                vpY_ = (height_ - vpH_) / 2;
+        if (presenter_) presenter_->Resize(width_, height_);
+
+        winehua::PresentFrameArgs args;
+        winehua::PresentFrameResult result;
+        args.rendererToplevelId = toplevelId_;
+        args.hostWidth = width_;
+        args.hostHeight = height_;
+
+        bool presented = presenter_ ? presenter_->Present(args, result) : false;
+        if (result.contentAvailable && result.contentWidth > 0 && result.contentHeight > 0) {
+            frameW_ = result.contentWidth;
+            frameH_ = result.contentHeight;
+            winehua::ViewportRect viewport =
+                winehua::ComputeLetterboxViewport(width_, height_, frameW_, frameH_);
+            vpX_ = viewport.x;
+            vpY_ = viewport.y;
+            vpW_ = viewport.w;
+            vpH_ = viewport.h;
+        }
+
+        if (!presented && presenter_ &&
+            presenter_->Path() != winehua::FramePresenterPath::CpuShmUpload &&
+            !presenter_->LastError().empty()) {
+            std::string reason = presenter_->LastError();
+            if (!SwitchPresenter(winehua::FramePresenterPath::CpuShmUpload, true, "fallback: " + reason)) {
+                PublishPresenterState(reason);
+                return;
             }
-            glViewport(vpX_, vpY_, vpW_, vpH_);
-        } else {
-            glViewport(0, 0, width_, height_);
+            usleep(16667);
+            continue;
         }
 
-        // 诊断: 前10帧详细打印 surface -> frame -> viewport 完整映射
-        if (loopCount < 10) {
-            int barTop = vpY_;
-            int barBot = height_ - vpY_ - vpH_;
-            int barLeft = vpX_;
-            int barRight = width_ - vpX_ - vpW_;
-            float sA = (float)width_ / height_;
-            float fA = fw > 0 && fh > 0 ? (float)fw / fh : 0;
-            OH_LOG_INFO(LOG_APP, "[MW-RNDR] diag#%{public}d tl=%{public}u surface=%{public}dx%{public}d(asp=%{public}.2f) frame=%{public}dx%{public}d(asp=%{public}.2f) vp=%{public}dx%{public}d+%{public}d,%{public}d bar=(L%{public}d R%{public}d T%{public}d B%{public}d)",
-                        loopCount, useToplevel,
-                        width_, height_, sA, fw, fh, fA,
-                        vpW_, vpH_, vpX_, vpY_,
-                        barLeft, barRight, barTop, barBot);
-        }
-
-        // surface 变化时打印 XComponent → Wine 尺寸映射 (与 ArkTS MW-RESIZE 共用关键字)
-        if ((width_ != lastLoggedW_ || height_ != lastLoggedH_) && loopCount >= 10) {
+        PublishPresenterState();
+        if ((width_ != lastLoggedW_ || height_ != lastLoggedH_) && frameW_ > 0 && frameH_ > 0) {
             lastLoggedW_ = width_;
             lastLoggedH_ = height_;
-            OH_LOG_INFO(LOG_APP, "[MW-RESIZE] tl=%{public}u surface=%{public}dx%{public}d frame=%{public}dx%{public}d",
-                        useToplevel, width_, height_, fw, fh);
+            OH_LOG_INFO(LOG_APP, "[MW-RESIZE] tl=%{public}u surface=%{public}dx%{public}d frame=%{public}dx%{public}d presenter=%{public}s",
+                        toplevelId_, width_, height_, frameW_, frameH_,
+                        presenter_ ? winehua::FramePresenterPathName(presenter_->Path()) : "none");
         }
-        glClearColor(0, 0, 0, 1);
-        glClear(GL_COLOR_BUFFER_BIT);
 
-        glUseProgram(program_);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, (void*)0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, (void*)8);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, texture_);
-        glUniform1i(glGetUniformLocation(program_, "uTex"), 0);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-
-        eglSwapBuffers(display_, surface_);
-        fps.Tick();
-        loopCount++;
         usleep(16667);
     }
 }
@@ -275,21 +211,24 @@ void EglRenderer::Shutdown() {
     running_ = false;
     if (thread_.joinable()) thread_.join();
     if (display_ != EGL_NO_DISPLAY) {
+        if (surface_ != EGL_NO_SURFACE && context_ != EGL_NO_CONTEXT) {
+            eglMakeCurrent(display_, surface_, surface_, context_);
+        }
+        if (presenter_) {
+            presenter_->Destroy();
+            presenter_.reset();
+        }
         eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         if (surface_ != EGL_NO_SURFACE) {
             eglDestroySurface(display_, surface_);
             surface_ = EGL_NO_SURFACE;
         }
-        // 每个 renderer 独立 EGLContext, 各自销毁
         if (context_ != EGL_NO_CONTEXT) {
             eglDestroyContext(display_, context_);
             context_ = EGL_NO_CONTEXT;
         }
-        // 不调 eglTerminate: 共享 display 由进程生命周期管理
-        // 避免反复 init/terminate 导致 GPU 驱动竞争, 偶发性 SIGSEGV
         OH_LOG_INFO(LOG_APP, "[EGL] tl=%{public}u Shutdown OK (display retained)", toplevelId_);
     }
-    // surfaceId 创建的 native window 在这里销毁 (EglRenderer 持有 window_ 指针)
     if (window_) {
         OH_NativeWindow_DestroyNativeWindow(window_);
         window_ = nullptr;

@@ -51,6 +51,14 @@ interface ProcessInfo {
   state: string;
 }
 
+interface BenchmarkStep {
+  origin: string;
+  exePath: string;
+  args: string[];
+  sampleOnWatchdog: boolean;
+  presenter: string;
+}
+
 @Entry
 @Component
 struct Index {
@@ -61,17 +69,32 @@ struct Index {
   @State entries: string[] = [];
   @State dirStack: string[] = [];
   @State processList: ProcessInfo[] = [];
+  private benchmarkMode: string = '';
+  private benchmarkPresenter: string = 'auto';
+  private benchmarkSeconds: number = 12;
+  private benchmarkIterations: number = 1;
+  private benchmarkQueue: BenchmarkStep[] = [];
+  private activeBenchmarkOrigin: string = '';
+  private activeBenchmarkPid: number = -1;
+  private activeBenchmarkSampleOnWatchdog: boolean = false;
+  private benchmarkWatchdogToken: number = 0;
+  private benchmarkRevision: number = -1;
+  private benchmarkPollTimer: number = -1;
+  private autoBenchmarkStarted: boolean = false;
+  private benchmarkRestartPending: boolean = false;
 
   aboutToAppear(): void {
     detectWinePath();
+    this.refreshBenchmarkRequest();
 
     testNapi.setStateCallback((s: string) => {
       hilog.info(DOMAIN, 'wine', 'state: %{public}s', s);
       this.state = s;
 
-      const colonIdx = s.indexOf(':');
-      const pid = colonIdx >= 0 ? parseInt(s.substring(0, colonIdx)) : -1;
-      const stateMsg = colonIdx >= 0 ? s.substring(colonIdx + 1) : s;
+      const parts = s.split(':');
+      const pid = parts.length > 1 ? parseInt(parts[0]) : -1;
+      const stateMsg = parts.length > 1 ? parts[1] : s;
+      const origin = parts.length > 2 ? parts.slice(2).join(':') : '';
 
       if (stateMsg == 'wineserver-starting' || stateMsg == 'wineboot-starting') {
         this.statusText = 'Wine 正在初始化...';
@@ -79,11 +102,31 @@ struct Index {
         this.statusText = '已就绪';
         // wineboot 可能还在后台初始化 prefix，轮询等待 drive_c 就绪
         this.waitForPrefix();
+        if (this.benchmarkRestartPending) {
+          this.benchmarkRestartPending = false;
+          hilog.info(DOMAIN, 'wine', '[Bench] restart ready remaining=%{public}d', this.benchmarkQueue.length);
+          setTimeout(() => this.runNextBenchmarkStep(), 1000);
+        } else {
+          this.maybeStartBenchmark();
+        }
       } else if (stateMsg == 'wine-running') {
         this.statusText = '运行中';
+        if (this.activeBenchmarkOrigin.length > 0 && origin === this.activeBenchmarkOrigin) {
+          this.activeBenchmarkPid = pid;
+          hilog.info(DOMAIN, 'wine', '[Bench] running step=%{public}s pid=%{public}d',
+            this.activeBenchmarkOrigin, this.activeBenchmarkPid);
+        }
         this.refreshProcessList();
       } else if (stateMsg == 'exited') {
         this.refreshProcessList();
+        if (this.activeBenchmarkOrigin.length > 0) {
+          hilog.info(DOMAIN, 'wine', '[Bench] finished step=%{public}s pid=%{public}d', this.activeBenchmarkOrigin, pid);
+          this.activeBenchmarkOrigin = '';
+          this.activeBenchmarkPid = -1;
+          this.activeBenchmarkSampleOnWatchdog = false;
+          this.benchmarkWatchdogToken++;
+          setTimeout(() => this.runNextBenchmarkStep(), 1200);
+        }
         const running = this.processList.filter(p => p.state === 'running');
         if (running.length === 0) {
           this.statusText = '已就绪';
@@ -94,8 +137,16 @@ struct Index {
       }
     });
     this.refreshPrefix();
+    this.benchmarkPollTimer = setInterval(() => this.refreshBenchmarkRequest(), 1000);
     // 下一帧自动初始化 (避免阻塞 UI 首次渲染)
     setTimeout(() => this.doInit(), 0);
+  }
+
+  aboutToDisappear(): void {
+    if (this.benchmarkPollTimer >= 0) {
+      clearInterval(this.benchmarkPollTimer);
+      this.benchmarkPollTimer = -1;
+    }
   }
 
   // Pad: 从 rawfile 取出 wine-data.zip → zlib.decompressFile 解压到 files/wine/
@@ -307,6 +358,132 @@ struct Index {
     this.statusText = '启动中...';
     let exePath = this.curDir + '/' + name;
     testNapi.runWineExe(BIN_DIR, SOCK, `${BIN_DIR}:${WINE_LIB}`, exePath);
+  }
+
+  private refreshBenchmarkRequest(): void {
+    const revision = Number(AppStorage.get<number>('winehua.benchmark.revision') ?? 0);
+    if (revision === this.benchmarkRevision) return;
+
+    this.benchmarkRevision = revision;
+    this.benchmarkMode = String(AppStorage.get<string>('winehua.benchmark') ?? '');
+    this.benchmarkPresenter = String(AppStorage.get<string>('winehua.benchmark.presenter') ?? 'auto');
+    this.benchmarkSeconds = Number(AppStorage.get<number>('winehua.benchmark.seconds') ?? 12);
+    this.benchmarkIterations = Number(AppStorage.get<number>('winehua.benchmark.iterations') ?? 1);
+    if (this.benchmarkSeconds <= 0) this.benchmarkSeconds = 12;
+    if (this.benchmarkIterations <= 0) this.benchmarkIterations = 1;
+    this.autoBenchmarkStarted = false;
+    this.benchmarkRestartPending = false;
+    hilog.info(DOMAIN, 'wine',
+      '[Bench] request revision=%{public}d mode=%{public}s presenter=%{public}s seconds=%{public}d iterations=%{public}d state=%{public}s',
+      revision, this.benchmarkMode, this.benchmarkPresenter, this.benchmarkSeconds, this.benchmarkIterations, this.state);
+    if (this.state === 'wine-ready') this.maybeStartBenchmark();
+  }
+
+  private maybeStartBenchmark(): void {
+    if (this.autoBenchmarkStarted || this.benchmarkMode.length === 0) return;
+    this.autoBenchmarkStarted = true;
+    if (this.benchmarkMode !== 'graphics-smoke' &&
+      this.benchmarkMode !== 'graphics-direct' &&
+      this.benchmarkMode !== 'graphics-explorer') {
+      hilog.warn(DOMAIN, 'wine', '[Bench] unknown benchmark mode=%{public}s', this.benchmarkMode);
+      return;
+    }
+
+    this.benchmarkQueue = [];
+    for (let i = 0; i < this.benchmarkIterations; i++) {
+      const suffix = this.benchmarkIterations > 1 ? `-${i + 1}` : '';
+      if (this.benchmarkMode === 'graphics-smoke' || this.benchmarkMode === 'graphics-direct') {
+        this.benchmarkQueue.push({
+          origin: `graphics-direct${suffix}`,
+          exePath: `${DRIVE_C}/winehua_graphics_smoke.exe`,
+          args: ['--seconds', String(this.benchmarkSeconds)],
+          sampleOnWatchdog: false,
+          presenter: this.benchmarkPresenter
+        });
+      }
+      if (this.benchmarkMode === 'graphics-smoke' || this.benchmarkMode === 'graphics-explorer') {
+        this.benchmarkQueue.push({
+          origin: `graphics-explorer${suffix}`,
+          exePath: 'explorer',
+          args: ['/desktop=winehua-smoke,960x540', 'C:\\winehua_graphics_smoke.exe', '--seconds', String(this.benchmarkSeconds)],
+          sampleOnWatchdog: true,
+          presenter: this.benchmarkPresenter
+        });
+      }
+    }
+
+    hilog.info(DOMAIN, 'wine', '[Bench] queued mode=%{public}s presenter=%{public}s iterations=%{public}d seconds=%{public}d steps=%{public}d',
+      this.benchmarkMode, this.benchmarkPresenter, this.benchmarkIterations, this.benchmarkSeconds, this.benchmarkQueue.length);
+    setTimeout(() => this.runNextBenchmarkStep(), 1000);
+  }
+
+  private runNextBenchmarkStep(): void {
+    if (this.activeBenchmarkOrigin.length > 0) return;
+    const step = this.benchmarkQueue.shift();
+    if (!step) {
+      this.cleanupBenchmarkRuntime('complete');
+      hilog.info(DOMAIN, 'wine', '[Bench] complete mode=%{public}s', this.benchmarkMode);
+      return;
+    }
+
+    this.activeBenchmarkOrigin = step.origin;
+    this.activeBenchmarkPid = -1;
+    this.activeBenchmarkSampleOnWatchdog = step.sampleOnWatchdog;
+    const watchdogToken = ++this.benchmarkWatchdogToken;
+    const timeoutMs = Math.max(this.benchmarkSeconds + 16, 24) * 1000;
+    const presenter = step.presenter.length > 0 ? step.presenter : 'auto';
+    testNapi.setFramePresenter(presenter);
+    hilog.info(DOMAIN, 'wine', '[Bench] starting step=%{public}s presenter=%{public}s exe=%{public}s args=%{public}s',
+      step.origin, presenter, step.exePath, JSON.stringify(step.args));
+    testNapi.runWineExe(BIN_DIR, SOCK, `${BIN_DIR}:${WINE_LIB}`, step.exePath, step.args, { origin: step.origin });
+    setTimeout(() => this.checkBenchmarkWatchdog(step.origin, watchdogToken), timeoutMs);
+  }
+
+  private cleanupBenchmarkRuntime(reason: string): void {
+    hilog.warn(DOMAIN, 'wine', '[Bench] cleanup reason=%{public}s', reason);
+    try {
+      testNapi.stopAll();
+      testNapi.setFramePresenter('auto');
+    } catch (e) {
+      hilog.error(DOMAIN, 'wine', '[Bench] cleanup failed: %{public}s', JSON.stringify(e));
+    }
+    this.state = 'idle';
+    this.activeBenchmarkPid = -1;
+    this.activeBenchmarkSampleOnWatchdog = false;
+    this.refreshProcessList();
+  }
+
+  private checkBenchmarkWatchdog(origin: string, token: number): void {
+    if (token !== this.benchmarkWatchdogToken || this.activeBenchmarkOrigin !== origin) return;
+
+    const pid = this.activeBenchmarkPid;
+    const sampled = this.activeBenchmarkSampleOnWatchdog;
+    if (sampled) {
+      hilog.info(DOMAIN, 'wine', '[Bench] sampled step=%{public}s pid=%{public}d seconds=%{public}d',
+        origin, pid, this.benchmarkSeconds);
+    } else {
+      hilog.warn(DOMAIN, 'wine', '[Bench] timeout step=%{public}s pid=%{public}d seconds=%{public}d',
+        origin, pid, this.benchmarkSeconds);
+    }
+    if (pid > 0) {
+      try {
+        testNapi.killProcess(pid);
+      } catch (e) {
+        hilog.error(DOMAIN, 'wine', '[Bench] kill timeout step failed: %{public}s', JSON.stringify(e));
+      }
+    }
+    this.activeBenchmarkOrigin = '';
+    this.activeBenchmarkPid = -1;
+    this.activeBenchmarkSampleOnWatchdog = false;
+    this.benchmarkWatchdogToken++;
+    const shouldRestart = this.benchmarkQueue.length > 0;
+    this.cleanupBenchmarkRuntime(`${sampled ? 'sampled' : 'timeout'}:${origin}`);
+    if (shouldRestart) {
+      this.benchmarkRestartPending = true;
+      setTimeout(() => this.doInit(), 1200);
+    } else {
+      setTimeout(() => this.runNextBenchmarkStep(), 1200);
+    }
   }
 
   private relPath = (): string => {

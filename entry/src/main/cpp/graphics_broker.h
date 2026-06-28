@@ -1,7 +1,10 @@
 #pragma once
 
+#include "frame_presenter.h"
+
 #include <atomic>
 #include <cstdint>
+#include <optional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -10,21 +13,27 @@ namespace winehua {
 
 enum class GraphicsBackend
 {
-    Shm = 0,
-    Virgl = 1,
+    Auto = 0,
+    Shm = 1,
+    Virgl = 2,
 };
 
 struct GraphicsBackendState
 {
-    GraphicsBackend requested = GraphicsBackend::Shm;
+    GraphicsBackend requested = GraphicsBackend::Auto;
     GraphicsBackend active = GraphicsBackend::Shm;
+    std::string backend;
+    std::string presenter;
     bool runtimeReady = false;
     bool guestReceiverPresent = false;
     bool virglSocketReady = false;
     bool virglLibraryPresent = false;
     bool virglSmokeAttempted = false;
     bool virglSmokeSucceeded = false;
+    bool fallbackActive = false;
+    bool damageUploadActive = false;
     bool zeroCopyFramePath = false;
+    bool nativeBufferInUse = false;
     std::string runtimeDir;
     std::string guestReceiverRuntimeDir;
     std::string guestReceiverMode;
@@ -34,6 +43,8 @@ struct GraphicsBackendState
     std::string frameTransportMode;
     std::string virglSmokeError;
     std::string lastError;
+    BackendCaps caps;
+    GraphicsStats stats;
 };
 
 class GraphicsBroker
@@ -46,9 +57,21 @@ public:
     void SetWineRuntimeBinaryDir(const std::string& wineBinDir);
 
     void SetRequestedBackend(GraphicsBackend backend);
+    void SetPresenterOverride(std::optional<FramePresenterPath> presenterPath);
+    std::optional<FramePresenterPath> GetPresenterOverride() const;
     GraphicsBackendState GetState() const;
+    void ReportPresenterState(FramePresenterPath path,
+                              bool fallbackActive,
+                              bool damageUploadActive,
+                              bool zeroCopyFramePath,
+                              bool nativeBufferInUse,
+                              const BackendCaps& caps,
+                              const GraphicsStats& stats,
+                              const std::string& transportMode,
+                              const std::string& note);
 
     void AppendWineEnv(std::vector<std::string>& env) const;
+    std::vector<std::string> BuildWineEnvOverrides() const;
     bool TakeFrameForToplevel(uint32_t rendererToplevelId,
                               std::vector<uint8_t>& outPixels,
                               int& w,
@@ -73,7 +96,7 @@ private:
     std::string ProbeVirglLibraryLocked(bool* outLoaded) const;
 
     mutable std::mutex mutex_;
-    GraphicsBackend requestedBackend_ = GraphicsBackend::Shm;
+    GraphicsBackend requestedBackend_ = GraphicsBackend::Auto;
     GraphicsBackend activeBackend_ = GraphicsBackend::Shm;
     bool started_ = false;
     bool runtimeReady_ = false;
@@ -82,6 +105,14 @@ private:
     bool virglLibraryPresent_ = false;
     bool virglSmokeAttempted_ = false;
     bool virglSmokeSucceeded_ = false;
+    FramePresenterPath presenterPath_ = FramePresenterPath::CpuShmUpload;
+    std::optional<FramePresenterPath> presenterOverride_;
+    bool presenterFallbackActive_ = false;
+    bool damageUploadActive_ = false;
+    bool zeroCopyFramePath_ = false;
+    bool nativeBufferInUse_ = false;
+    BackendCaps caps_;
+    GraphicsStats stats_;
     bool loggedVirglFallback_ = false;
     std::string runtimeDir_;
     std::string wineRuntimeBinDir_;
@@ -92,6 +123,8 @@ private:
     std::string virglServerProgramPath_;
     std::string virglSocketPath_;
     std::string virglLibraryPath_;
+    std::string frameTransportMode_ = "wl_shm+cpu_copy+gl_upload";
+    std::string presenterNote_;
     std::string virglSmokeError_;
     std::string lastError_;
     int virglServerPid_ = -1;

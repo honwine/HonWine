@@ -8,15 +8,18 @@ export const setPendingToplevel: (id: number) => void;
 export const getCurrentToplevelId: () => number;
 export const destroyToplevel: (id: number) => void;
 export const sendToplevelClose: (id: number) => void;
-export const runWineExe: (binDir: string, sockPath: string, libPath: string, exePath: string, argv?: string[]) => void;
+export const runWineExe: (binDir: string, sockPath: string, libPath: string, exePath: string, argv?: string[], options?: { origin?: string }) => void;
 export const checkWinePrefix: () => boolean;
 export const resetWinePrefix: () => void;
 export const setOutputSize: (w: number, h: number) => void;
 export const setDisplayScale: (scale: number) => void;
 export const setGraphicsBackend: (backend: string) => boolean;
+export const setFramePresenter: (presenter: string) => boolean;
 export const getGraphicsBackendState: () => {
   requested: string,
   active: string,
+  backend: string,
+  presenter: string,
   runtimeReady: boolean,
   guestReceiverPresent: boolean,
   guestReceiverRuntimeDir: string,
@@ -26,13 +29,45 @@ export const getGraphicsBackendState: () => {
   virglLibraryPresent: boolean,
   virglSmokeAttempted: boolean,
   virglSmokeSucceeded: boolean,
+  fallbackActive: boolean,
+  damageUploadActive: boolean,
   zeroCopyFramePath: boolean,
+  nativeBufferInUse: boolean,
   runtimeDir: string,
   virglSocketPath: string,
   virglLibraryPath: string,
   frameTransportMode: string,
   virglSmokeError: string,
-  lastError: string
+  lastError: string,
+  caps: {
+    virglAvailable: boolean,
+    xcomponentEglAvailable: boolean,
+    glCompositorAvailable: boolean,
+    nativeBufferAvailable: boolean,
+    eglImageAvailable: boolean,
+    dmaBufAvailable: boolean
+  },
+  stats: {
+    frameCount: bigint,
+    cpuCopyBytes: bigint,
+    surfaceCommitCount: bigint,
+    surfaceCommitBytes: bigint,
+    snapshotCopyCount: bigint,
+    snapshotCopyBytes: bigint,
+    glUploadBytes: bigint,
+    skippedFrames: bigint,
+    damagePixels: bigint,
+    damageRectCount: bigint,
+    mergedDamagePixels: bigint,
+    fullSurfaceDamageCount: bigint,
+    partialDamageCount: bigint,
+    fullUploadFrames: bigint,
+    partialUploadFrames: bigint,
+    lastPresentMs: number,
+    avgPresentMs: number,
+    lastUploadMs: number,
+    avgUploadMs: number
+  }
 };
 export const setDesktopMode: (enabled: boolean) => void;
 export const getDesktopRootId: () => number;

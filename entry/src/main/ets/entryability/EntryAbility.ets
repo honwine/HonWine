@@ -6,13 +6,37 @@ import { WineWindowManager } from '../service/WineWindowManager';
 const DOMAIN = 0x0000;
 
 export default class EntryAbility extends UIAbility {
+  private applyBenchmarkParams(want: Want, source: string): void {
+    const params = want.parameters ?? {};
+    const mode = String(params['winehua.benchmark'] ?? params['benchmark'] ?? params['bench'] ?? '');
+    const seconds = Number(params['winehua.benchmark.seconds'] ?? params['benchmarkSeconds'] ?? params['seconds'] ?? 12);
+    const iterations = Number(params['winehua.benchmark.iterations'] ?? params['benchmarkIterations'] ?? params['iterations'] ?? 1);
+    const presenter = String(params['winehua.benchmark.presenter'] ?? params['benchmarkPresenter'] ?? params['presenter'] ?? 'auto');
+    const revision = Number(AppStorage.get<number>('winehua.benchmark.revision') ?? 0) + 1;
+
+    AppStorage.setOrCreate('winehua.benchmark', mode);
+    AppStorage.setOrCreate('winehua.benchmark.seconds', seconds);
+    AppStorage.setOrCreate('winehua.benchmark.iterations', iterations);
+    AppStorage.setOrCreate('winehua.benchmark.presenter', presenter);
+    AppStorage.setOrCreate('winehua.benchmark.revision', revision);
+    hilog.info(DOMAIN, 'testTag',
+      '[Bench] %{public}s params=%{public}s parsed mode=%{public}s presenter=%{public}s seconds=%{public}d iterations=%{public}d revision=%{public}d',
+      source, JSON.stringify(params), mode, presenter, seconds, iterations, revision);
+  }
+
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     try {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_DARK);
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
+    this.applyBenchmarkParams(want, 'onCreate');
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
+  }
+
+  onNewWant(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    this.applyBenchmarkParams(want, 'onNewWant');
+    hilog.info(DOMAIN, 'testTag', 'Ability onNewWant launchReason=%{public}d', launchParam.launchReason);
   }
 
   onDestroy(): void {

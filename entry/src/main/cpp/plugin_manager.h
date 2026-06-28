@@ -31,6 +31,7 @@ public:
     void CreateRenderer(uint32_t toplevelId, int64_t surfaceId);
     void ResizeRenderer(uint32_t toplevelId, int w, int h);
     void DestroyToplevel(uint32_t toplevelId);
+    void DestroyAllRenderers();
 
     // pending toplevelId 队列: Ability 在 loadContent 前入队
     // WineWindow.aboutToAppear 同步出队 (FIFO, 无竞态)

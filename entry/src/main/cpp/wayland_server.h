@@ -1,21 +1,63 @@
 #pragma once
-#include <wayland-server-core.h>
-#include <wayland-server-protocol.h>
-#include <string>
-#include <thread>
-#include <mutex>
-#include <vector>
-#include <functional>
+
+#include "graphics_types.h"
+
 #include <atomic>
 #include <cstdint>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 
-// 最小 Wayland Compositor: wl_compositor + wl_surface + wl_shm
+#include <wayland-server-core.h>
+#include <wayland-server-protocol.h>
+
 class WaylandServer {
 public:
+    enum class SceneSurfaceSource {
+        CompatToplevel = 0,
+        RawSurface = 1,
+        SubsurfaceLayer = 2,
+    };
+
+    struct SceneSurfaceSnapshot {
+        uint64_t cacheKey = 0;
+        uint32_t toplevelId = 0;
+        int x = 0;
+        int y = 0;
+        int width = 0;
+        int height = 0;
+        uint32_t shmFormat = WL_SHM_FORMAT_XRGB8888;
+        uint64_t bufferSerial = 0;
+        uint64_t damageSerial = 0;
+        bool opaque = true;
+        bool isRoot = false;
+        bool isSubsurface = false;
+        SceneSurfaceSource source = SceneSurfaceSource::CompatToplevel;
+        std::shared_ptr<const std::vector<uint8_t>> pixels;
+        std::vector<winehua::DamageRect> damages;
+    };
+
+    struct SceneSnapshot {
+        bool desktopMode = false;
+        uint32_t rootToplevelId = 0;
+        int canvasWidth = 0;
+        int canvasHeight = 0;
+        uint64_t sceneSerial = 0;
+        std::vector<SceneSurfaceSnapshot> surfaces;
+    };
+
+    struct CopyStats {
+        uint64_t surfaceCommitCount = 0;
+        uint64_t surfaceCommitBytes = 0;
+        uint64_t snapshotCopyCount = 0;
+        uint64_t snapshotCopyBytes = 0;
+    };
+
     using StateCb = std::function<void(const char*)>;
-    // toplevel 回调: (toplevelId, eventName, jsonData)
-    // events: "created", "destroyed", "title", "configure"
     using ToplevelCb = std::function<void(uint32_t, const char*, const char*)>;
 
     static WaylandServer* GetInstance();
@@ -25,51 +67,41 @@ public:
     bool Start(const std::string& socketPath);
     void Stop();
 
-    // EglRenderer 调用: 取最新一帧像素 (deprecated, 用 TakeToplevelFrame)
     bool TakeFrame(std::vector<uint8_t>& outPixels, int& w, int& h);
-    // 取指定 toplevel 的最新帧
     bool TakeToplevelFrame(uint32_t toplevelId, std::vector<uint8_t>& outPixels, int& w, int& h);
+    bool GetSceneSnapshot(uint32_t rendererToplevelId, SceneSnapshot& outSnapshot);
+    CopyStats GetGraphicsCopyStats() const;
 
-    // 状态回调 (首帧到达 -> 通知 ArkTS)
     void SetStateCallback(StateCb cb) { stateCb_ = std::move(cb); }
     void FireState(const char* s) { if (stateCb_) stateCb_(s); }
     void ResetFirstFrame() { firstFrame_ = false; }
 
-    // toplevel 回调 (xdg_toplevel 生命周期 -> 通知 ArkTS 创建/销毁窗口)
     void SetToplevelCallback(ToplevelCb cb) { toplevelCb_ = std::move(cb); }
     void FireToplevelEvent(uint32_t id, const char* event, const char* jsonData = "{}");
 
-    // 生成唯一 toplevel ID
     uint32_t NextToplevelId() { return nextToplevelId_++; }
 
-    // toplevel resource 映射 (用于 SendToplevelClose -> xdg_toplevel_send_close)
     void RegisterToplevelResource(uint32_t toplevelId, wl_resource* tl);
     void UnregisterToplevelResource(uint32_t toplevelId);
-    // 清理 toplevel 像素数据 + 标记 root dirty (desktop mode)
     void OnToplevelDestroyed(uint32_t toplevelId);
     void SendToplevelClose(uint32_t toplevelId);
-    // 鸿蒙侧恢复最小化窗口时调用: 清除 minimized 标志 + 发 configure 通知 Wine
     void NotifyWindowRestored(uint32_t toplevelId);
-    // 鸿蒙侧 surface 尺寸变化时调用: 发 configure 通知 Wine 用新尺寸渲染
     void NotifyToplevelResize(uint32_t toplevelId, int32_t w, int32_t h);
-    // 设置输出尺寸 (替换硬编码 1280x720)
+
     void SetOutputSize(int32_t w, int32_t h) { outputW_ = w; outputH_ = h; }
     int32_t outputW_ = 1280;
     int32_t outputH_ = 720;
-    // Desktop 模式: 在合成帧中查找包含 (x,y) 的 toplevel (用于输入路由)
+
     uint32_t FindToplevelAt(int x, int y);
-    // Desktop 模式: 提到 Z-order 最顶层
     void RaiseToplevel(uint32_t id);
-    // 读取 toplevel 桌面坐标 (InputManager 坐标转换用)
     int GetToplevelX(uint32_t id) { std::lock_guard<std::mutex> lk(toplevelMutex_); return toplevelX_[id]; }
     int GetToplevelY(uint32_t id) { std::lock_guard<std::mutex> lk(toplevelMutex_); return toplevelY_[id]; }
-    // Desktop 合成模式 (Tablet): 全部 toplevel 合成到一个 root framebuffer
+
     void SetDesktopMode(bool on) { desktopMode_ = on; }
     bool IsDesktopMode() const { return desktopMode_; }
     void SetDesktopRootToplevelId(uint32_t id) { desktopRootToplevelId_ = id; }
     uint32_t GetDesktopRootToplevelId() const { return desktopRootToplevelId_; }
 
-    // -- wayland 协议实现 --
     static void compositor_bind(wl_client*, void*, uint32_t, uint32_t);
     static void compositor_create_surface(wl_client*, wl_resource*, uint32_t);
     static void compositor_create_region(wl_client*, wl_resource*, uint32_t);
@@ -83,17 +115,16 @@ public:
     static void surface_set_input_region(wl_client*, wl_resource*, wl_resource*) {}
     static void surface_set_buffer_transform(wl_client*, wl_resource*, int32_t) {}
     static void surface_set_buffer_scale(wl_client*, wl_resource*, int32_t) {}
-    static void surface_damage_buffer(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t) {}
+    static void surface_damage_buffer(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t);
     static void surface_offset(wl_client*, wl_resource*, int32_t, int32_t) {}
 
     static void region_destroy(wl_client*, wl_resource*) {}
     static void region_add(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t) {}
     static void region_subtract(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t) {}
 
-    /* wl_subcompositor */
     static void subcompositor_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
     static void subcompositor_get_subsurface(wl_client*, wl_resource*, uint32_t, wl_resource*, wl_resource*);
-    /* wl_subsurface */
+
     static void subsurface_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
     static void subsurface_set_position(wl_client*, wl_resource*, int32_t, int32_t);
     static void subsurface_place_above(wl_client*, wl_resource*, wl_resource*) {}
@@ -101,45 +132,58 @@ public:
     static void subsurface_set_sync(wl_client*, wl_resource*) {}
     static void subsurface_set_desync(wl_client*, wl_resource*) {}
 
-    /* wp_viewporter */
     static void viewporter_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
     static void viewporter_get_viewport(wl_client*, wl_resource*, uint32_t, wl_resource*);
-    /* wp_viewport */
+
     static void viewport_destroy(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
     static void viewport_set_source(wl_client*, wl_resource*, wl_fixed_t, wl_fixed_t, wl_fixed_t, wl_fixed_t) {}
     static void viewport_set_destination(wl_client*, wl_resource*, int32_t, int32_t) {}
 
-    /* Globals bind */
     static void subcompositor_bind(wl_client*, void*, uint32_t, uint32_t);
     static void viewporter_bind(wl_client*, void*, uint32_t, uint32_t);
     static void output_bind(wl_client*, void*, uint32_t, uint32_t);
-    /* wl_output */
     static void output_release(wl_client*, wl_resource* r) { wl_resource_destroy(r); }
 
-    // toplevelId -> wl_surface 映射 (供 Seat::InjectPointerEnter 查找)
     wl_resource* GetSurfaceForToplevel(uint32_t toplevelId);
 
 private:
     WaylandServer() = default;
     void EventLoop();
+    void ResetCopyStats();
+    void AddSurfaceCommitBytes(size_t bytes);
+    void AddSnapshotCopyBytes(size_t bytes);
+    bool MaterializeCompatToplevelFrameLocked(uint32_t toplevelId,
+                                              std::vector<uint8_t>& outPixels,
+                                              int& w,
+                                              int& h);
+    bool MaterializeDesktopRootFrameLocked(uint32_t toplevelId,
+                                           std::vector<uint8_t>& outPixels,
+                                           int& w,
+                                           int& h);
 
     wl_display* display_ = nullptr;
     std::thread thread_;
     std::atomic<bool> running_{false};
 
-    // 全局帧缓冲 (deprecated, 保留兼容)
     std::mutex mutex_;
     std::vector<uint8_t> pixels_;
-    int width_ = 0, height_ = 0;
+    int width_ = 0;
+    int height_ = 0;
     std::atomic<bool> dirty_{false};
 
-    // toplevel 帧缓冲: toplevelId -> pixels
     std::mutex toplevelMutex_;
     std::unordered_map<uint32_t, std::vector<uint8_t>> toplevelPixels_;
-    std::unordered_map<uint32_t, int> toplevelW_, toplevelH_;
-    std::unordered_map<uint32_t, int> toplevelX_, toplevelY_;  // desktop compositing position
+    std::unordered_map<uint32_t, std::shared_ptr<const std::vector<uint8_t>>> toplevelCanonicalPixels_;
+    std::unordered_map<uint32_t, int> toplevelW_;
+    std::unordered_map<uint32_t, int> toplevelH_;
+    std::unordered_map<uint32_t, int> toplevelX_;
+    std::unordered_map<uint32_t, int> toplevelY_;
+    std::unordered_map<uint32_t, uint64_t> toplevelBufferSerial_;
+    std::unordered_map<uint32_t, uint64_t> toplevelDamageSerial_;
+    std::unordered_map<uint32_t, std::vector<winehua::DamageRect>> toplevelDamages_;
     std::unordered_map<uint32_t, bool> toplevelDirty_;
-    std::unordered_map<uint32_t, int> toplevelLastReportedW_, toplevelLastReportedH_;
+    std::unordered_map<uint32_t, int> toplevelLastReportedW_;
+    std::unordered_map<uint32_t, int> toplevelLastReportedH_;
 
     StateCb stateCb_;
     ToplevelCb toplevelCb_;
@@ -148,55 +192,82 @@ private:
     std::unordered_map<uint32_t, wl_resource*> toplevelResources_;
     std::mutex toplevelResMutex_;
 
-    // toplevelId -> wl_surface 映射 (input focus 查找)
     std::unordered_map<uint32_t, wl_resource*> toplevelSurfaceMap_;
     std::mutex toplevelSurfaceMutex_;
 
-    // Desktop 合成模式
     bool desktopMode_ = false;
     uint32_t desktopRootToplevelId_ = 0;
-    // subsurface 合成层 (不写入 toplevelPixels_, 避免污染)
+
     struct SubsurfaceLayer {
         wl_resource* surface = nullptr;
-        std::vector<uint8_t> pixels;
-        int x = 0, y = 0, w = 0, h = 0;
+        uint32_t parentToplevelId = 0;
+        std::shared_ptr<std::vector<uint8_t>> pixels;
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+        uint32_t shmFormat = WL_SHM_FORMAT_XRGB8888;
+        uint64_t bufferSerial = 0;
+        uint64_t damageSerial = 0;
+        bool opaque = true;
+        std::vector<winehua::DamageRect> damages;
     };
+
     std::vector<SubsurfaceLayer> subsurfaceLayers_;
-    std::vector<uint32_t> toplevelZOrder_;  // 前景→背景
+    std::vector<uint32_t> toplevelZOrder_;
+    uint64_t sceneSerial_ = 0;
+    uint32_t lastCommittedToplevelId_ = 0;
+    std::atomic<uint64_t> surfaceCommitCount_{0};
+    std::atomic<uint64_t> surfaceCommitBytes_{0};
+    std::atomic<uint64_t> snapshotCopyCount_{0};
+    std::atomic<uint64_t> snapshotCopyBytes_{0};
 };
 
-// wl_surface 的每个实例携带的数据
 struct SurfaceData {
     wl_resource* surface = nullptr;
     wl_resource* pendingBuffer = nullptr;
     std::vector<wl_resource*> frameCallbacks;
 
-    // per-surface pixel buffer
-    std::vector<uint8_t> pixels;
-    int w = 0, h = 0;
+    std::shared_ptr<std::vector<uint8_t>> pixels = std::make_shared<std::vector<uint8_t>>();
+    int bufferW = 0;
+    int bufferH = 0;
+    int w = 0;
+    int h = 0;
+    int contentOffsetX = 0;
+    int contentOffsetY = 0;
+    uint32_t bufferFormat = WL_SHM_FORMAT_XRGB8888;
     bool dirty = false;
+    bool opaque = true;
+    uint64_t bufferSerial = 0;
+    uint64_t damageSerial = 0;
+    std::vector<winehua::DamageRect> pendingDamages;
+    std::vector<winehua::DamageRect> committedDamages;
 
-    // toplevel identity
     uint32_t toplevelId = 0;
     bool hasToplevel = false;
     std::string title;
-    int x = 0, y = 0, winW = 640, winH = 480;
+    int x = 0;
+    int y = 0;
+    int winW = 640;
+    int winH = 480;
 
-    // xdg_surface window geometry (content area within buffer), 默认全 buffer
     bool hasWindowGeometry = false;
-    int geoX = 0, geoY = 0, geoW = 0, geoH = 0;
+    int geoX = 0;
+    int geoY = 0;
+    int geoW = 0;
+    int geoH = 0;
 
-    // subsurface 父子追踪 (用于 popup 菜单合成到父 toplevel)
-    wl_resource* parentSurface = nullptr;     // 父 wl_surface (仅 subsurface)
-    int32_t subsurfaceX = 0, subsurfaceY = 0; // wl_subsurface.set_position
+    wl_resource* parentSurface = nullptr;
+    int32_t subsurfaceX = 0;
+    int32_t subsurfaceY = 0;
     bool isSubsurface = false;
 
-    // window states
     bool minimized = false;
     bool maximized = false;
 
-    // xdg_toplevel resize 约束 (0 = 无限制)
     bool hasSizeLimits = false;
-    int32_t minWidth = 0, minHeight = 0;
-    int32_t maxWidth = 0, maxHeight = 0;
+    int32_t minWidth = 0;
+    int32_t minHeight = 0;
+    int32_t maxWidth = 0;
+    int32_t maxHeight = 0;
 };

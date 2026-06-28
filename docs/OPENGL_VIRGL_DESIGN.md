@@ -119,22 +119,27 @@ flowchart LR
 ### 改动用途
 
 - `dlls/win32u/opengl.c`
+
   - 新增 `WINEHUA_OPENGL_DIAG`
   - 打印 `libEGL` 加载、`eglGetConfigs`、像素格式数量等诊断信息
 
 - `dlls/winewayland.drv/opengl.c`
+
   - 新增 `winehua_virgl_guest_probe`
   - 在 Wine guest 侧探测 `WINEHUA_VIRGL_SOCKET` 是否可连通
   - 用来区分“guest bundle 已接上”还是“仍在走 stock EGL”
 
 - `programs/winehua_graphics_smoke/*`
+
   - 增加真实 Windows 图形冒烟测试程序
   - 直接验证 `ChoosePixelFormat / wglCreateContext / SwapBuffers`
 
 - `configure.ac`
+
   - 把 `winehua_graphics_smoke` 纳入 Wine 构建系统
 
 - `tools/makedep.c`
+
   - 修正新增 program 后触发的 install command 生成问题
   - 同时补了错误输出，方便排查构建期断点
 
@@ -177,17 +182,20 @@ flowchart LR
 ## 未来提交版本时的建议拆分
 
 - 可考虑单独提交的通用修复
+
   - `thirdparty/virglrenderer/src/vrend/vrend_winsys.c`
   - `thirdparty/virglrenderer/meson.build`
   - `thirdparty/virglrenderer/meson_options.txt`
   - `thirdparty/wine/tools/makedep.c`
 
 - 更适合项目内保留的改动
+
   - `GraphicsBroker`
   - `guest_gfx` build / package 脚本
   - `winehua_graphics_smoke`
   - `WINEHUA_*` 环境变量和诊断日志
 
 - 需要清理后再评估是否上游的改动
+
   - `dlls/win32u/opengl.c` 中的诊断路径
   - `dlls/winewayland.drv/opengl.c` 中的 guest probe 逻辑

@@ -43,8 +43,7 @@ void PluginManager::CreateRenderer(uint32_t toplevelId, int64_t surfaceId) {
 
     auto r = std::make_unique<EglRenderer>();
     // 初始尺寸 1x1, 真正尺寸由 ResizeRenderer (onSurfaceChanged) 设置
-    if (r->Init(win, 1, 1)) {
-        r->SetToplevelId(toplevelId);
+    if (r->Init(win, toplevelId, 1, 1)) {
         toplevelRenderers_[toplevelId] = std::move(r);
         OH_LOG_INFO(LOG_APP, "[MW-Create] OK toplevel #%{public}u renderer created (total=%{public}zu)",
                     toplevelId, toplevelRenderers_.size());
@@ -87,6 +86,16 @@ void PluginManager::DestroyToplevel(uint32_t toplevelId) {
     }
 }
 
+void PluginManager::DestroyAllRenderers() {
+    OH_LOG_INFO(LOG_APP, "[MW-Life] DestroyAllRenderers count=%{public}zu", toplevelRenderers_.size());
+    for (auto& item : toplevelRenderers_) {
+        if (item.second) item.second->Shutdown();
+    }
+    toplevelRenderers_.clear();
+    while (!pendingToplevelQueue_.empty()) pendingToplevelQueue_.pop();
+    OH_LOG_INFO(LOG_APP, "[MW-Destroy] all renderers destroyed");
+}
+
 EglRenderer* PluginManager::GetRendererForToplevel(uint32_t tid) {
     auto rit = toplevelRenderers_.find(tid);
     if (rit == toplevelRenderers_.end()) return nullptr;
@@ -102,6 +111,7 @@ void PluginManager::MoveRendererToToplevel(uint32_t oldId, uint32_t newId) {
         return;
     }
     OH_LOG_INFO(LOG_APP, "[MW-Plug] MoveRenderer tl #%{public}u -> #%{public}u", oldId, newId);
+    it->second->SetToplevelId(newId);
     toplevelRenderers_[newId] = std::move(it->second);
     toplevelRenderers_.erase(it);
 }

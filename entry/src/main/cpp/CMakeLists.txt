@@ -29,7 +29,10 @@ add_library(entry SHARED
     audio_broker.cpp
     audio_ipc_server.cpp
     audio_stream.cpp
+    backend_detector.cpp
     graphics_broker.cpp
+    cpu_shm_presenter.cpp
+    gl_compositor_presenter.cpp
     napi_init.cpp
     broker.cpp
     wayland_server.cpp
@@ -37,6 +40,7 @@ add_library(entry SHARED
     plugin_manager.cpp
     ring_buffer.cpp
     seat.cpp
+    surface_texture_cache.cpp
     input_manager.cpp
     xdg_shell.cpp
     xdg-shell-protocol.c
